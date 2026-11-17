@@ -8,7 +8,6 @@ import skorimako.shared.*
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.scalajs.js
-import scala.scalajs.js.annotation.JSGlobal
 import scala.util.{Failure, Success}
 
 final case class Toast(id: Int, text: String, link: Option[String], error: Boolean)
@@ -56,6 +55,26 @@ object Store {
   /** 時間の範囲（画面をまたいで同じ. この端末に記憶する）. */
   val range: RV[TimeSel] = RV(TimeSel(Prefs.get("range", "1h")))
 
+  /** 絞り込むサービス（service_name. 空ならすべて）. 画面をまたいで同じ. URL の ?service= があればそれを使う. */
+  val service: RV[String] = RV(Query.get("service").getOrElse(Prefs.get("service", "")))
+  /** 選べるサービス（データを送ってきたもの）. */
+  val serviceNames: RV[List[String]] = RV(Nil)
+
+  def setService(v: String): Unit = {
+    service := v
+    Prefs.set("service", v)
+  }
+
+  /** いまのサービスの SQL の条件（service_name = '…'）. 画面の条件と AND でつなぐ. */
+  def serviceWhere(where: String): String = {
+    val c = if (service.v.isEmpty) "" else s"service_name = '${service.v.replace("'", "''")}'"
+    List(where.trim, c).filter(_.nonEmpty) match {
+      case Nil => ""
+      case List(x) => x
+      case xs => xs.map(x => s"($x)").mkString(" AND ")
+    }
+  }
+
   /** 読み直しの合図（↻ のボタン）. */
   val tick: RV[Int] = RV(0)
 
@@ -67,6 +86,7 @@ object Store {
   def onReload(f: => Unit): Unit = {
     watch(range, false)((_, _) => f)
     watch(tick, false)((_, _) => f)
+    watch(service, false)((_, _) => f)
   }
 
   def isAdmin = me.mapC(_.exists(_.isAdmin))
@@ -190,39 +210,6 @@ object Fmt {
     else if (u.isEmpty) "none"
     else "info"
   }
-
-}
-
-/** グラフ（frontend/src/chart.js の uPlot）. */
-@js.native
-@JSGlobal("skoChart")
-private object ChartJs extends js.Object {
-  def render(el: dom.Element, spec: js.Object): js.Dynamic = js.native
-}
-
-final case class ChartSeries(label: String, points: List[(Double, Option[Double])], color: String = "")
-
-/** グラフの内容. kind は line か bar. points の時刻はミリ秒. onSelect はドラッグで選んだ範囲（ミリ秒）. */
-final case class ChartSpec(kind: String, series: List[ChartSeries], unit: String = "", height: Int = 220,
-                           onSelect: Option[(Double, Double) => Unit] = None, emptyText: String = "データがありません", legend: Boolean = true)
-
-object ChartFacade {
-
-  def toJs(c: ChartSpec): js.Object = {
-    val series = js.Array(c.series.map { s =>
-      js.Dynamic.literal(label = s.label, color = (if (s.color.isEmpty) js.undefined else s.color),
-        points = js.Array(s.points.map((t, v) => js.Array[js.Any](t, v.fold[js.Any](null)(x => x)))*))
-    }*)
-    val o = js.Dynamic.literal(kind = c.kind, series = series, unit = c.unit, height = c.height, emptyText = c.emptyText, legend = c.legend)
-    c.onSelect.foreach(f => o.onSelect = (a: Double, b: Double) => f(a, b))
-    o.asInstanceOf[js.Object]
-  }
-
-  def render(el: dom.Element, c: ChartSpec): js.Dynamic = ChartJs.render(el, toJs(c))
-
-  def formatValue(v: Double, unit: String): String =
-    dom.window.asInstanceOf[js.Dynamic].skoChartFormat.asInstanceOf[js.UndefOr[js.Function2[Double, String, String]]].toOption
-      .map(_(v, unit)).getOrElse(if (v == math.rint(v)) v.toLong.toString else v.toString)
 
 }
 

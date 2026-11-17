@@ -139,7 +139,7 @@ object Main extends IOApp.Simple:
       _   <- IO(java.security.Security.setProperty("networkaddress.cache.ttl", "30"))
       cfg <- Config.load
       n   <- migrateWithRetry(cfg)
-      _   <- IO.println(s"[skorimako] database migrated ($n migration(s) applied); node ${cfg.nodeId}")
+      _   <- skorimako.core.Log.println(s"[skorimako] database migrated ($n migration(s) applied); node ${cfg.nodeId}")
       _ <- (for
         xa     <- Database.transactor(cfg.db)
         http   <- EmberClientBuilder.default[IO].withTimeout(30.seconds).build
@@ -164,10 +164,13 @@ object Main extends IOApp.Simple:
         maint    = new Maintenance(streams, objects, engine, cfg.duck, cfg.maintenance, lock, cfg.nodeId, cfg.dataDir.resolve("tmp"))
         sess     = new SessionAuth(users, cfg.api)
         stuiCli  = new StuiClient(cfg.api.stui, new IntegrationTokenStore(xa), http, box, cfg.api.publicUrl)
-        alertSvc = new AlertService(alerts, engine, http, box, cfg.api, stuiCli, stats)
+        pushStore = new skorimako.push.PushStore(xa)
+        push    <- Resource.eval(skorimako.push.PushService.create(pushStore, http, cfg.api.publicUrl,
+                     r => IO(stats.inc("skorimako_push_sent_total", Map("result" -> r)))))
+        alertSvc = new AlertService(alerts, engine, http, box, cfg.api, stuiCli, stats, push)
         selfMon  = new SelfMonitor(ingest, stats, apps, streams, lock, cfg.nodeId)
         _ <- Resource.eval(startupNotes(cfg))
-        _ <- Resource.eval(IO.whenA(cfg.selfMonitor)(selfMon.ensureDashboard.handleErrorWith(e => IO.println(s"[skorimako] self dashboard: $e"))))
+        _ <- Resource.eval(IO.whenA(cfg.selfMonitor)(selfMon.ensureDashboard.handleErrorWith(e => skorimako.core.Log.println(s"[skorimako] self dashboard: $e"))))
         loops = List[IO[Unit]](
                   ingester.loop, alertSvc.loop, alertSvc.deliveryLoop, maint.compactLoop, maint.retentionLoop, maint.cacheLoop,
                   purgeLoop(users, alerts, lock), transform.loop
@@ -187,6 +190,7 @@ object Main extends IOApp.Simple:
             new OAuthRoutes(new OAuthStore(xa), users, sess, cfg.api).routes <+>
             stuiCli.routes(sess, users) <+>
             new LinkRoutes(streams, alerts, apps, acl, sess, cfg.api).routes <+>
+            new PushRoutes(pushStore, push, sess).routes <+>
             peers.routes
         app = rest <+> new McpRoutes(rest, sess, cfg.api.publicUrl).routes
         all = cfg.staticDir.fold(app)(d => app <+> spa(d))
@@ -197,7 +201,7 @@ object Main extends IOApp.Simple:
                .withMaxHeaderSize(64 * 1024)
                .withHttpApp(ErrorHandling.Custom.recoverWith(Guards(all, cfg.api).orNotFound)(handler))
                .build
-        _ <- Resource.eval(IO.println(s"[skorimako] listening on :${cfg.port} (${cfg.api.publicUrl})"))
+        _ <- Resource.eval(skorimako.core.Log.println(s"[skorimako] listening on :${cfg.port} (${cfg.api.publicUrl})"))
       yield ()).useForever
     yield ()
 
@@ -205,14 +209,14 @@ object Main extends IOApp.Simple:
   private def migrateWithRetry(cfg: AppConfig, attempt: Int = 1): IO[Int] =
     Database.migrate(cfg.db).handleErrorWith { e =>
       if attempt >= 60 then IO.raiseError(e)
-      else IO.println(s"[skorimako] database not ready (${e.getMessage.take(120)}); retry $attempt/60") *> IO.sleep(2.seconds) *> migrateWithRetry(cfg, attempt + 1)
+      else skorimako.core.Log.println(s"[skorimako] database not ready (${e.getMessage.take(120)}); retry $attempt/60") *> IO.sleep(2.seconds) *> migrateWithRetry(cfg, attempt + 1)
     }
 
   private def objectStore(cfg: AppConfig): Resource[IO, ObjectStore] = cfg.s3 match
     case Some(c) => S3ObjectStore.resource(c).evalTap(_.ensureBucket).widen[ObjectStore]
     case None =>
       val dir = Paths.get(cfg.storageDir.getOrElse("storage")).toAbsolutePath.normalize()
-      Resource.eval(IO.println(s"[skorimako] WARNING: S3_ENDPOINT が未設定のため、データを $dir に置きます（1台だけの構成。冗長化には S3 互換ストレージが必要です）")
+      Resource.eval(skorimako.core.Log.println(s"[skorimako] WARNING: S3_ENDPOINT が未設定のため、データを $dir に置きます（1台だけの構成。冗長化には S3 互換ストレージが必要です）")
         .as(new LocalObjectStore(dir)))
 
   /** ロードバランサー用のヘルスチェック。DB（プライマリ）に書けない状態なら 503。 */
@@ -229,12 +233,12 @@ object Main extends IOApp.Simple:
     IO.pure(Response[IO](status).withEntity(body)(using EntityEncoder.stringEncoder))
 
   private def startupNotes(cfg: AppConfig): IO[Unit] =
-    IO.whenA(cfg.oidc.isEmpty)(IO.println("[skorimako] WARNING: OIDC が未設定です。開発用のログイン（DEV_LOGIN）を使います。本番では使わないでください"))
+    IO.whenA(cfg.oidc.isEmpty)(skorimako.core.Log.println("[skorimako] WARNING: OIDC が未設定です。開発用のログイン（DEV_LOGIN）を使います。本番では使わないでください"))
 
   private val handler: PartialFunction[Throwable, IO[Response[IO]]] = {
     case _: org.http4s.server.middleware.EntityLimiter.EntityTooLarge => PayloadTooLarge(ErrorDto("本文が大きすぎます"))
     case e =>
-      IO.println(s"[skorimako] unhandled error: $e") *> InternalServerError(ErrorDto("サーバーでエラーが発生しました"))
+      skorimako.core.Log.error("unhandled error", e) *> InternalServerError(ErrorDto("サーバーでエラーが発生しました"))
   }
 
   /** 期限切れのセッション・古い監査ログ・アラートの履歴と送信の記録を消す（1ノードだけ）。 */

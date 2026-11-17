@@ -52,10 +52,11 @@ stui への通知は [docs/integrations.md](docs/integrations.md) を参照し�
 | `modules/auth` | OIDC（Authorization Code + PKCE）、APIキー、暗号化 |
 | `modules/storage` | S3 互換ストレージ（Parquet のファイル）。1台だけで動かすときのローカルのディレクトリ |
 | `modules/engine` | OTLP の解釈、取り込みのバッファと WAL、Parquet の書き出し、DuckDB による検索、圧縮・保持期間 |
+| `modules/push` | プッシュ通知（PWA。Web Push の暗号化と VAPID。アラートの発生・解消を、ルールを作った人と stui の DM の宛先の人に送る） |
 | `modules/api` | http4s のルート（取り込み・REST・MCP）と、アラートの評価・通知のサービス |
 | `modules/app` | 起動・設定（環境変数）・画面の配信・定期処理 |
 | `modules/web` | 画面（[Scalactive](https://github.com/Ondeoma/scalactive) の `.st` 単一ファイルコンポーネント） |
-| `frontend/` | Vite。Scala.js の出力と uPlot（グラフ）をまとめてビルドする。`public/rum.js` はブラウザの観測の SDK |
+| `frontend/` | Vite。Scala.js の出力と uPlot（グラフ）をまとめてビルドする。`public/rum.js` はブラウザの観測の SDK、`public/sw.js` は PWA の Service Worker（オフラインで開く・プッシュ通知） |
 | `deploy/` | Docker（試験用の3ノード構成）と VM 構築用の設定のひな形 |
 
 技術: Scala 3.3 LTS、Cats Effect 3、http4s 1.0（マイルストーン版）、doobie、Flyway、PostgreSQL 17、DuckDB（組み込み）、Apache Parquet、

@@ -30,7 +30,7 @@ def chip(s: State, v: String) = s.t.mapC(x => if (x == v) "chip active" else "ch
     </div>
     <p class="muted small">{{ total(s) }}</p>
     <div class="table-wrap">
-      <table class="list">
+      <table class="list nowrap">
         <thead><tr><th>種類</th><th>名前</th><th>行数</th><th>ファイル</th><th>保存量</th><th>データの範囲</th><th>保持</th></tr></thead>
         <tbody>
           <tr v-for="x in shown(s)" :key="x.id" class="clickable" @click='Store.go(s"/streams/${x.streamType}/${x.name}")'>

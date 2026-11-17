@@ -308,8 +308,32 @@ object PanelKind {
  * パネル. sql の結果の1列目を時刻（マイクロ秒）、残りの数値の列を系列として描く（line・bar）.
  * stat は1行目の最初の数値、table は結果をそのまま. sql の中の $__interval は区切りの長さ（マイクロ秒）に置き換える.
  */
-final case class PanelDto(id: String, title: String, kind: String, streamType: String, sql: String, width: Int, unit: String)
-    derives Encoder.AsObject, Decoder
+/** spec: かんたん作成（選んで組み立てる）で作ったパネルの指定. あれば編集のときにかんたん作成で開き直せる（SQL はそこから作ったもの）. */
+final case class PanelDto(id: String, title: String, kind: String, streamType: String, sql: String, width: Int, unit: String,
+    spec: Option[PanelSpec] = None) derives Encoder.AsObject, Decoder
+
+/** パネルの条件の1行. op は PanelOp のどれか. */
+final case class PanelFilter(field: String, op: String, value: String) derives Encoder.AsObject, Decoder
+
+/**
+ * かんたん作成のパネルの指定. measure は集計（count・avg・sum・min・max・last・p50〜p99・rate）、field は集計する列（count・メトリクスでは不要）.
+ * groupBy で系列（表なら行）を分け、多いときは上位 topN だけにする. service は service_name の絞り込み.
+ */
+final case class PanelSpec(streamType: String, stream: String, measure: String, field: Option[String], groupBy: Option[String],
+    filters: List[PanelFilter], service: Option[String], topN: Option[Int]) derives Encoder.AsObject, Decoder
+
+final case class PanelSqlReq(spec: PanelSpec, kind: String) derives Encoder.AsObject, Decoder
+/** 組み立てた SQL と、単位の目安（トレースの所要時間なら ms）. */
+final case class PanelSqlDto(sql: String, unit: String) derives Encoder.AsObject, Decoder
+
+object PanelOp {
+  val all: List[String] = List("=", "!=", "contains", ">", ">=", "<", "<=", "exists")
+  def label(o: String): String = o match {
+    case "contains" => "を含む"
+    case "exists"   => "がある"
+    case x          => x
+  }
+}
 
 final case class DashboardDto(id: UUID, name: String, description: String, panels: List[PanelDto], createdBy: Option[UserBrief],
     updatedAt: Timestamp) derives Encoder.AsObject, Decoder

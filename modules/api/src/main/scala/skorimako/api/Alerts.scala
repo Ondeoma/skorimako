@@ -12,6 +12,7 @@ import skorimako.auth.{Crypto, SecretBox}
 import skorimako.core.*
 import skorimako.db.*
 import skorimako.engine.*
+import skorimako.push.{PushMessage, PushService}
 import skorimako.shared.*
 
 import java.nio.charset.StandardCharsets
@@ -24,7 +25,8 @@ import scala.concurrent.duration.*
  * 評価: 時刻が来たルールを全ノードが取り合い（次の評価の時刻を先に進めるので二重にしない）、直近 period の範囲で SQL を実行する。
  * 通知: 状態が変わったとき（発生・解消）と、発生中に沈黙の時間が過ぎたときに、通知先へ送る（送信待ちの表から再試行つきで）。
  */
-final class AlertService(store: AlertStore, engine: QueryEngine, http: Client[IO], box: SecretBox, cfg: ApiConfig, stui: StuiClient, stats: Stats):
+final class AlertService(store: AlertStore, engine: QueryEngine, http: Client[IO], box: SecretBox, cfg: ApiConfig, stui: StuiClient, stats: Stats,
+    push: PushService):
 
   // ---------------------------------------------------------------- 検査・評価
 
@@ -126,10 +128,18 @@ final class AlertService(store: AlertStore, engine: QueryEngine, http: Client[IO
               case AlertLogic.Action.Fire    => Some(("firing", value, hits, s"${rule.name}: ${AlertService.describe(rule.mode, hits, rule.op, rule.threshold)}"))
               case AlertLogic.Action.Resolve => Some(("resolved", value, Nil, s"${rule.name}: 解消しました"))
               case AlertLogic.Action.None    => None
-            store.record(rule, EvalRecord(state, value, None, notified = event.isDefined, fired = action == AlertLogic.Action.Fire, event))
+            store.record(rule, EvalRecord(state, value, None, notified = event.isDefined, fired = action == AlertLogic.Action.Fire, event)) <*
+              event.filter(_ => !rule.silenced).traverse_((st, _, _, msg) => pushEvent(rule, st, msg).start)
         }
       }
     }.map(_.size))
+
+  /** 発生・解消を、ルールを作った人と通知先（stui の DM）の人の端末にプッシュ通知で送る（ミュート中は送らない）。 */
+  private def pushEvent(rule: RuleRow, state: String, message: String): IO[Unit] =
+    val (icon, label) = AlertService.label(state)
+    val m = PushMessage(s"$icon [$label] ${rule.name}", message.stripPrefix(rule.name + ": "), s"/alerts/${rule.id}", Some(s"alert-${rule.id}"))
+    store.pushRecipients(rule).flatMap(_.traverse_(push.send(_, m)))
+      .handleErrorWith(e => skorimako.core.Log.warn(s"alert push failed: $e"))
 
   def loop: IO[Nothing] =
     Periodic.run(15.seconds, 10.seconds)(e => s"[skorimako] alert evaluation failed: $e")(tick)
@@ -155,12 +165,7 @@ final class AlertService(store: AlertStore, engine: QueryEngine, http: Client[IO
   /** 通知の本文。stui は Markdown、Slack は mrkdwn、webhook は JSON。 */
   def payload(d: DeliveryRow): Json =
     val hits = d.hits.as[List[AlertHitDto]].getOrElse(Nil)
-    val (icon, label) = d.eventState match
-      case "firing"   => ("🔴", "発生")
-      case "resolved" => ("✅", "解消")
-      case "test"     => ("🧪", "通知の試験")
-      case "acknowledged" => ("👀", "対応中")
-      case s          => ("⚠️", s)
+    val (icon, label) = AlertService.label(d.eventState)
     val detail =
       if d.eventState == "test" then "skorimako からの通知の試験です"
       else d.message.stripPrefix(d.ruleName + ": ")
@@ -241,6 +246,14 @@ final class AlertService(store: AlertStore, engine: QueryEngine, http: Client[IO
     Periodic.run(10.seconds, 5.seconds)(e => s"[skorimako] alert delivery failed: $e")(store.processDeliveries(50)(send))
 
 object AlertService:
+  /** 出来事（発生・解消など）の印と名前。 */
+  def label(state: String): (String, String) = state match
+    case "firing"       => ("🔴", "発生")
+    case "resolved"     => ("✅", "解消")
+    case "test"         => ("🧪", "通知の試験")
+    case "acknowledged" => ("👀", "対応中")
+    case s              => ("⚠️", s)
+
   /** 発生のときの文言。途絶は「最後のデータから◯分」。 */
   def describe(mode: String, hits: List[AlertHitDto], op: String, threshold: Double): String =
     if mode == AlertMode.Absence then

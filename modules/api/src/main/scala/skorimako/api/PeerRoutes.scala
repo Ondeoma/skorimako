@@ -68,7 +68,7 @@ final class PeerRoutes(ingester: Ingester, streams: StreamStore, http: Client[IO
   /** 自分を登録し続ける（止めるときは外す）。 */
   def heartbeat: Resource[IO, Unit] =
     nodeUrl match
-      case None => Resource.eval(IO.println("[skorimako] NODE_URL が未設定のため、ほかのノードの書き出す前の行は検索に出ません（1台なら不要）"))
+      case None => Resource.eval(skorimako.core.Log.println("[skorimako] NODE_URL が未設定のため、ほかのノードの書き出す前の行は検索に出ません（1台なら不要）"))
       case Some(url) =>
         Resource.make(IO.unit)(_ => streams.leaveNode(nodeId).handleError(_ => ())) *>
-          (streams.heartbeat(nodeId, url).handleErrorWith(e => IO.println(s"[skorimako] heartbeat failed: $e")) *> IO.sleep(30.seconds)).foreverM.background.void
+          (streams.heartbeat(nodeId, url).handleErrorWith(e => skorimako.core.Log.println(s"[skorimako] heartbeat failed: $e")) *> IO.sleep(30.seconds)).foreverM.background.void

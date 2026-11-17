@@ -311,6 +311,24 @@ final class StreamStore(xa: Transactor[IO]) extends TxStore(xa):
           where s.stream_type = $streamType and f.deleted_at is null order by v limit $limit""".query[String].to[List]
   )
 
+  /** メトリクスごとの送り元のサービス（書き出したファイルの service_name のタグ）。メトリクスの画面で、どのサービスのものかを出す。 */
+  def metricServices: IO[Map[String, List[String]]] = tx(
+    sql"""select s.name, v from data_file f join stream s on s.id = f.stream_id, jsonb_array_elements_text(f.tags -> 'service_name') v
+          where s.stream_type = ${StreamType.Metrics} and f.deleted_at is null group by s.name, v""".query[(String, String)].to[List]
+  ).map(_.groupMap(_._1)(_._2).view.mapValues(_.sorted).toMap)
+
+  /** 1つのストリームの列の値（書き出したファイルのタグ. 種類の少ない文字列の列だけ）. ダッシュボードの条件の値の候補に使う。 */
+  def tagValuesOf(streamId: UUID, column: String, limit: Int): IO[List[String]] = tx(
+    sql"""select distinct v from data_file f, jsonb_array_elements_text(f.tags -> $column) v
+          where f.stream_id = $streamId and f.deleted_at is null order by v limit $limit""".query[String].to[List]
+  )
+
+  /** データを送ってきたサービスの名前（ログ・メトリクス・トレースの書き出したファイルの service_name）。画面のサービスの絞り込みに使う。 */
+  def serviceNames: IO[List[String]] = tx(
+    sql"""select distinct v from data_file f join stream s on s.id = f.stream_id, jsonb_array_elements_text(f.tags -> 'service_name') v
+          where f.deleted_at is null and s.stream_type <> 'rum' order by v limit 500""".query[String].to[List]
+  )
+
   /** その種類のすべてのストリームの列の名前。 */
   def fieldNames(streamType: String): IO[List[String]] = tx(
     sql"""select distinct f.name from stream_field f join stream s on s.id = f.stream_id where s.stream_type = $streamType order by 1"""

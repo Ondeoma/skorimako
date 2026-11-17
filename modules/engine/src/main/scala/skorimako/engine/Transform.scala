@@ -36,7 +36,7 @@ final class Transform private (store: StreamStore, rules: Ref[IO, Map[(String, S
       _  <- limits.set(ls.map((t, n, m) => (t, n) -> m).toMap)
     yield ()
 
-  def loop: IO[Nothing] = (IO.sleep(Acl.refresh) *> reload.handleErrorWith(e => IO.println(s"[skorimako] ingest rules reload failed: $e"))).foreverM
+  def loop: IO[Nothing] = (IO.sleep(Acl.refresh) *> reload.handleErrorWith(e => skorimako.core.Log.println(s"[skorimako] ingest rules reload failed: $e"))).foreverM
 
   /** ルールを当て、上限を確かめる。 */
   def apply(streamType: String, batch: Batch): IO[Either[Reject, Batch]] =

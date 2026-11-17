@@ -44,7 +44,7 @@ def stopLive(s: State): Unit = { s.timer.v.foreach(org.scalajs.dom.window.clearI
 
 def tail(s: State): Unit = {
   val end = (scala.scalajs.js.Date.now() * 1000).toLong
-  Api.logs(LogSearchReq(s.stream.v, s.lastTs.v + 1, end, Some(s.where.v), Some(s.keyword.v), Some(200), Some(0), Some("desc"))).foreach { r =>
+  Api.logs(LogSearchReq(s.stream.v, s.lastTs.v + 1, end, Some(Store.serviceWhere(s.where.v)), Some(s.keyword.v), Some(200), Some(0), Some("desc"))).foreach { r =>
     val rows = Rows.of(r.result)
     if (rows.nonEmpty) {
       rows.headOption.flatMap(_.get(Columns.Timestamp)).flatMap(Rows.long).foreach(s.lastTs := _)
@@ -60,6 +60,7 @@ val PageSize = 100
 
 def mounted(s: State): Unit = {
   pageTitle("ログ")
+  Query.get("service").foreach(Store.setService)
   Store.report(Api.streams(Some(StreamType.Logs))) { ss =>
     s.streams := ss
     if (ss.nonEmpty && !ss.exists(_.name == s.stream.v)) s.stream := ss.head.name
@@ -88,7 +89,7 @@ def search(s: State, more: Boolean = false): Unit = if (s.mode.v == "sql") runSq
   val offset = if (more) s.rows.v.size else 0
   s.loading := true; s.error := ""
   if (!more) Query.replace("stream" -> Some(s.stream.v), "where" -> Some(s.where.v.trim), "q" -> Some(s.keyword.v.trim))
-  Api.logs(LogSearchReq(s.stream.v, start, end, Some(s.where.v), Some(s.keyword.v), Some(PageSize), Some(offset), None)).onComplete {
+  Api.logs(LogSearchReq(s.stream.v, start, end, Some(Store.serviceWhere(s.where.v)), Some(s.keyword.v), Some(PageSize), Some(offset), None)).onComplete {
     case Success(r) =>
       s.loading := false
       val rows = Rows.of(r.result)
@@ -161,6 +162,7 @@ def traceLink(k: String, j: Json): Boolean = k == "trace_id" && Fmt.cell(j).nonE
       <select :value="s.stream" @change="changeStream(s, Dom.value(event))">
         <option v-for="st in s.streams" :value="st.name" :selected="s.stream.mapC(_ == st.name)">{{ st.name }}</option>
       </select>
+      <ServicePicker />
       <TimeRange />
     </div>
     <p v-if="noStreams(s)" class="empty">ログのストリームがまだありません。OTLP（/v1/logs）か JSON（/api/ingest/{ストリーム}/_json）で送ってください。</p>

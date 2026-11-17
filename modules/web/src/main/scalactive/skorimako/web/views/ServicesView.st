@@ -8,27 +8,28 @@ import scala.util.{Failure, Success}
 
 // サービス（トレースから）: サービスごとの要求・エラー率・所要時間（RED）、サービス間の呼び出しの図、選んだサービスの時系列.
 case class State(map: RV[Option[ServiceMapDto]] = RV(None),
-                 selected: RV[String] = RV(Query.get("service").getOrElse("")),
+                 selected: RV[String] = RV(""),
                  req: RV[ChartSpec] = RV(ChartSpec("bar", Nil, height = 160)),
                  lat: RV[ChartSpec] = RV(ChartSpec("line", Nil, height = 160)),
                  error: RV[String] = RV(""))
 
 def initState() = State()
 
-def mounted(s: State): Unit = { pageTitle("サービス"); load(s); Store.onReload(load(s)) }
+def mounted(s: State): Unit = { pageTitle("サービス"); Query.get("service").foreach(Store.setService); load(s); Store.onReload(load(s)) }
 
 def load(s: State): Unit = {
   val (start, end) = Store.range.v.micros
   Api.get[ServiceMapDto](s"/api/services/map?start=$start&end=$end").onComplete {
     case Success(m) =>
       s.map := Some(m); s.error := ""
-      if (s.selected.v.isEmpty) m.services.headOption.foreach(x => s.selected := x.name)
+      // 共通のサービスの絞り込みを選んでいればそれ、なければ先頭のサービス
+      s.selected := (if (Store.service.v.nonEmpty) Store.service.v else m.services.headOption.map(_.name).getOrElse(""))
       series(s)
     case Failure(e) => s.error := e.getMessage
   }
 }
 
-def pick(s: State, name: String): Unit = { s.selected := name; Query.replace("service" -> Some(name)); series(s) }
+def pick(s: State, name: String): Unit = Store.setService(name)
 
 def series(s: State): Unit = if (s.selected.v.nonEmpty) {
   val (start, end) = Store.range.v.micros
@@ -94,7 +95,7 @@ def logsLink(s: State) = s.selected.mapC(x => "/logs?where=" + Api.enc(s"service
 
 <template>
   <div class="page wide">
-    <div class="toolbar"><h1 class="grow">サービス</h1><TimeRange /></div>
+    <div class="toolbar"><h1 class="grow">サービス</h1><ServicePicker /><TimeRange /></div>
     <p class="muted small">トレースから求めます（サービスの入口のスパン: SERVER・CONSUMER・ルート）。円はサービス、矢印は呼び出し（数字は回数。赤はエラーを含む）。</p>
     <p v-if="s.error.mapC(_.nonEmpty)" class="error">{{ s.error }}</p>
     <p v-if="services(s).mapC(_.isEmpty)" class="empty">この時間の範囲にトレースがありません</p>

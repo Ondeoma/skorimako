@@ -123,6 +123,8 @@ service:
 | `STUI_URL`・`STUI_CLIENT_ID`・`STUI_CLIENT_SECRET`・`STUI_INTERNAL_URL` | | stui の DM への通知（[integrations.md](integrations.md)） |
 | `OAUTH_CLIENTS` | | skorimako を使う外部のサービス（stui がリンクの要約を読む） |
 | `SELF_MONITOR` | true | 自己監視（自分のメトリクス・ログ・ダッシュボード） |
+| `LOG_FORMAT`・`LOG_LEVEL` | text・INFO | 標準出力のログの形（`text`・`json`）と水準。自分のログは OTLP では送らない（警告・エラーは自己監視で自分に取り込む） |
+| `VAPID_SUBJECT` | `PUBLIC_URL` | プッシュ通知（PWA）の連絡先（`mailto:…` か `https://…`）。VAPID の鍵は初回の起動で作って DB に保存する |
 | `FLUSH_SECONDS` | 10 | 取り込んだ行を書き出す間隔 |
 | `FLUSH_ROWS` | 200000 | 1つのストリームにこれだけたまったら早めに書き出す |
 | `MAX_BUFFERED_ROWS` | 2000000 | 書き出す前の行の上限（超えたら 503） |

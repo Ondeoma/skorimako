@@ -73,12 +73,12 @@ final class Maintenance(store: StreamStore, objects: ObjectStore, engine: QueryE
 
   def compactLoop: IO[Nothing] =
     Periodic.run(2.minutes, 5.minutes)(e => s"[skorimako] compaction failed: $e")(
-      lock.exclusive("compact", 30.minutes)(compact.flatMap(n => IO.whenA(n > 0)(IO.println(s"[skorimako] compacted $n file(s)")))))
+      lock.exclusive("compact", 30.minutes)(compact.flatMap(n => IO.whenA(n > 0)(skorimako.core.Log.println(s"[skorimako] compacted $n file(s)")))))
 
   def retentionLoop: IO[Nothing] =
     Periodic.run(5.minutes, 30.minutes)(e => s"[skorimako] retention failed: $e")(
       lock.exclusive("retention", 25.minutes)(expireAndDelete.flatMap((e, d) =>
-        IO.whenA(e + d > 0)(IO.println(s"[skorimako] retention: expired $e file(s), deleted $d object(s)")))))
+        IO.whenA(e + d > 0)(skorimako.core.Log.println(s"[skorimako] retention: expired $e file(s), deleted $d object(s)")))))
 
   /** キャッシュの掃除（ノードごと）。 */
   def cacheLoop: IO[Nothing] =

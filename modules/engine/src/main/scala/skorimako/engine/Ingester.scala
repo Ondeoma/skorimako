@@ -220,7 +220,7 @@ object Ingester:
       m <- Mutex[IO]
       i = new Ingester(cfg, duck, store, objects, m, stats)
       n <- m.lock.surround(i.recover)
-      _ <- IO.whenA(n > 0)(IO.println(s"[skorimako] recovered $n row(s) from WAL"))
+      _ <- IO.whenA(n > 0)(skorimako.core.Log.println(s"[skorimako] recovered $n row(s) from WAL"))
     yield i
 
   /** S3 のキー: {種類}/{ストリーム}/{年}/{月}/{日}/{時}/{ノード}-{乱数}.parquet（時刻は最も古い行の UTC）。 */

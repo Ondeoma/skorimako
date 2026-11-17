@@ -49,13 +49,15 @@ lazy val web = (project in file("modules/web"))
     )
   )
 
-// ドメイン（純粋なロジック: 値の型・列名の規則・SQL の組み立てと検査・アラートの判定）
+// ドメイン（純粋なロジック: 値の型・列名の規則・SQL の組み立てと検査・アラートの判定）と、アプリのログ（Log）
 lazy val core = (project in file("modules/core"))
   .dependsOn(shared.jvm)
   .settings(commonTest)
   .settings(
     libraryDependencies ++= Seq(
-      "io.circe" %% "circe-parser" % circeV
+      "io.circe"      %% "circe-parser" % circeV,
+      "org.typelevel" %% "cats-effect"  % ceV,
+      "org.slf4j"      % "slf4j-api"    % "2.0.17"
     )
   )
 
@@ -114,8 +116,19 @@ lazy val engine = (project in file("modules/engine"))
     )
   )
 
+// プッシュ通知（PWA. Web Push の暗号化と VAPID は JDK の暗号の機能だけで実装）
+lazy val push = (project in file("modules/push"))
+  .dependsOn(db)
+  .settings(commonTest)
+  .settings(
+    libraryDependencies ++= Seq(
+      "org.http4s" %% "http4s-client" % http4sV,
+      "io.circe"   %% "circe-core"    % circeV
+    )
+  )
+
 lazy val api = (project in file("modules/api"))
-  .dependsOn(core, db % "compile;test->test", auth, storage, engine, shared.jvm)
+  .dependsOn(core, db % "compile;test->test", auth, storage, engine, shared.jvm, push)
   .settings(commonTest)
   .settings(
     libraryDependencies ++= Seq(
@@ -145,5 +158,5 @@ lazy val app = (project in file("modules/app"))
   )
 
 lazy val root = (project in file("."))
-  .aggregate(shared.jvm, shared.js, web, core, db, auth, storage, engine, api, app)
+  .aggregate(shared.jvm, shared.js, web, core, db, auth, storage, engine, push, api, app)
   .settings(name := "skorimako", publish / skip := true)

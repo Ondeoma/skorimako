@@ -4,7 +4,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import scala.jdk.CollectionConverters.*
 
 /**
- * skorimako 自身の警告・エラーのログ。標準出力に出し、同時にためておく（SelfMonitor が自分のログのストリームに取り込む）。
+ * skorimako 自身の警告・エラーのログ。標準出力（logback）に出し、同時にためておく（SelfMonitor が自分のログのストリームに取り込む）。
  * 取り込みが止まっていても溢れないよう、たまるのは1万件まで。
  */
 object SelfLog:
@@ -16,7 +16,11 @@ object SelfLog:
   def info(msg: String): Unit = add("INFO", msg)
 
   private def add(level: String, msg: String): Unit =
-    println(s"[skorimako] $msg")
+    val log = skorimako.core.Log.logger
+    level match
+      case "ERROR" => log.error(msg)
+      case "WARN"  => log.warn(msg)
+      case _       => log.info(msg)
     if q.size() < 10000 then q.add(Entry(System.currentTimeMillis() * 1000, level, msg.take(4000)))
 
   def drain(): List[Entry] =

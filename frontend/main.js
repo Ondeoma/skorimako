@@ -1,9 +1,8 @@
 import './style.css'
 import 'uplot/dist/uPlot.min.css'
-import { renderChart, formatValue } from './src/chart.js'
+import uPlot from 'uplot'
 
-// Scala.js の画面から使うグラフ（uPlot）
-window.skoChart = { render: renderChart }
-window.skoChartFormat = formatValue
+// Scala.js の画面（ChartFacade）から使うグラフのライブラリ
+window.uPlot = uPlot
 
 import 'scalajs:main.js'

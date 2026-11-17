@@ -1,5 +1,6 @@
 <script lang="scala">
 import skorimako.web.*
+import skorimako.web.parts.*
 import skorimako.shared.*
 import io.circe.syntax.*
 
@@ -152,6 +153,10 @@ def visibleScopes = Store.isAdmin.mapC(a => KeyScope.all.filter(sc => a || sc !=
     <p><button @click="saveMe(s)">保存</button></p>
     <label class="field"><span>画面の色（この端末）</span>
       <select :value="Theme.current" @change="Theme.set(Dom.value(event))"><option v-for="o in Theme.options" :value="o._1">{{ o._2 }}</option></select></label>
+
+    <h2>通知</h2>
+    <p class="muted small">あなたが作ったアラートのルールと、あなた宛ての stui の DM を通知先にしたルールが、発生・解消したときに届きます（ミュート中は届きません）。</p>
+    <p><PushToggle /></p>
 
     <template v-for="i in s.integrations">
       <h2>{{ i.name }} との連携</h2>

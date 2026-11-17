@@ -75,5 +75,5 @@ object GrpcIngest:
           .addService(ServerInterceptors.intercept(metrics, Capture))
           .build().start()
       })(s => IO.blocking { s.shutdown(); s.awaitTermination(5, TimeUnit.SECONDS) }.void)
-        .evalMap(_ => IO.println(s"[skorimako] OTLP/gRPC listening on :$port"))
+        .evalMap(_ => skorimako.core.Log.println(s"[skorimako] OTLP/gRPC listening on :$port"))
     }

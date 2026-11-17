@@ -8,7 +8,7 @@ import scala.util.{Failure, Success}
 
 // トレース: サービス・名前・時間・エラーで探す. 所要時間の散らばりのグラフと一覧. クリックでトレースの詳細（ウォーターフォール）.
 case class State(services: RV[List[ServiceDto]] = RV(Nil),
-                 service: RV[String] = RV(Query.get("service").getOrElse("")),
+                 service: RV[String] = RV(""),
                  name: RV[String] = RV(""),
                  minMs: RV[String] = RV(""),
                  errors: RV[Boolean] = RV(false),
@@ -19,11 +19,12 @@ case class State(services: RV[List[ServiceDto]] = RV(Nil),
 
 def initState() = State()
 
-def mounted(s: State): Unit = { pageTitle("トレース"); search(s); Store.onReload(search(s)) }
+def mounted(s: State): Unit = { pageTitle("トレース"); Query.get("service").foreach(Store.setService); search(s); Store.onReload(search(s)) }
 
 def search(s: State): Unit = {
   val (start, end) = Store.range.v.micros
   s.loading := true
+  s.service := Store.service.v
   Api.get[List[ServiceDto]]("/api/traces/services" + Api.query("start" -> Some(start.toString), "end" -> Some(end.toString))).foreach(s.services := _)
   Api.traces(TraceSearchReq(start, end, Some(s.service.v), Some(s.name.v), s.minMs.v.toDoubleOption, Some(s.errors.v), None, Some(300))).onComplete {
     case Success(ts) =>
@@ -37,14 +38,15 @@ def search(s: State): Unit = {
 }
 
 def openId(s: State): Unit = { val id = s.traceId.v.trim.toLowerCase; if (id.nonEmpty) Store.go("/traces/" + id) }
-def svcCls(s: State, n: String) = s.service.mapC(x => if (x == n) "chip active" else "chip")
-def pickSvc(s: State, n: String): Unit = { s.service := (if (s.service.v == n) "" else n); search(s) }
+def svcCls(s: State, n: String) = Store.service.mapC(x => if (x == n) "chip active" else "chip")
+def pickSvc(s: State, n: String): Unit = Store.setService(if (Store.service.v == n) "" else n)
 </script>
 
 <template>
   <div class="page wide">
     <div class="toolbar"><h1 class="grow">トレース</h1>
       <form class="row" @submit.prevent="openId(s)"><input type="search" class="mono" v-model="s.traceId" placeholder="トレース ID で開く"></form>
+      <ServicePicker />
       <TimeRange /></div>
     <div class="chips svcs">
       <button v-for="x in s.services" :class="svcCls(s, x.name)" @click="pickSvc(s, x.name)">{{ x.name }} <span class="muted">{{ x.traceCount }}</span>

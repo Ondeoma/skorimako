@@ -179,6 +179,12 @@ final class AlertStore(xa: Transactor[IO]) extends TxStore(xa):
     sql"select kind, url, secret, target_user_id from alert_destination where id = $id".query[(String, String, Option[String], Option[UUID])].option
   )
 
+  /** アラートのプッシュ通知を受け取る人: ルールを作った人と、通知先（stui の DM）の宛先の人。 */
+  def pushRecipients(rule: RuleRow): IO[List[UUID]] =
+    tx(sql"""select target_user_id from alert_destination
+             where id = any(${rule.destinationIds.toArray}) and kind = ${DestinationKind.StuiDm} and target_user_id is not null"""
+      .query[UUID].to[List]).map(us => (rule.createdById.toList ++ us).distinct)
+
   def createDestination(r: DestinationReq, secret: Option[String], by: UUID): IO[UUID] =
     val id = UUID.randomUUID()
     tx(sql"""insert into alert_destination (id, name, kind, url, secret, created_by, target_user_id)

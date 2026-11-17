@@ -33,6 +33,7 @@ final class SelfMonitor(ingest: IngestService, stats: Stats, apps: AppStore, str
     "skorimako_query_files_pruned_total" -> ("値の一覧で読まずに済んだファイル", "1"),
     "skorimako_alert_evaluations_total" -> ("アラートの評価の回数", "1"),
     "skorimako_alert_notifications_total" -> ("アラートの通知の送信", "1"),
+    "skorimako_push_sent_total" -> ("プッシュ通知の送信（結果ごと）", "1"),
     "skorimako_cache_bytes" -> ("検索のキャッシュの大きさ", "By"),
     "jvm_memory_heap_used_bytes" -> ("JVM のヒープの使用量", "By"),
     "jvm_memory_heap_max_bytes" -> ("JVM のヒープの上限", "By"),

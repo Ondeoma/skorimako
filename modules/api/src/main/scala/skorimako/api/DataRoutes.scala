@@ -48,6 +48,36 @@ final class DataRoutes(streams: StreamStore, alerts: AlertStore, engine: QueryEn
     case req @ GET -> Root / "api" / "streams" =>
       authed(req)(s => visibleStreams(s, param(req, "type").filter(StreamType.all.contains), param(req, "q")).flatMap(Ok(_)))
 
+    // データを送ってきたサービスの名前（画面のサービスの絞り込み）
+    case req @ GET -> Root / "api" / "service-names" =>
+      authed(req)(_ => streams.serviceNames.flatMap(Ok(_)))
+
+    // メトリクスごとの送り元のサービス（{"jvm_memory_used": ["skea", "stui"], …}）
+    case req @ GET -> Root / "api" / "metrics" / "services" =>
+      authed(req)(_ => streams.metricServices.flatMap(Ok(_)))
+
+    // 列の値の候補（ダッシュボードのかんたん作成の条件）
+    case req @ GET -> Root / "api" / "streams" / TypeVar(t) / name / "values" =>
+      authed(req)(s => withStream(s, t, name)(st => param(req, "field").filter(_.nonEmpty) match
+        case None    => err(Status.BadRequest, "field を指定してください")
+        case Some(f) => streams.tagValuesOf(st.id, f, 200).flatMap(Ok(_))))
+
+    // ダッシュボードのかんたん作成: 選んだ指定から SQL を組み立てる（区切りは $__interval のまま）
+    case req @ POST -> Root / "api" / "panels" / "sql" =>
+      authed(req)(s => body[PanelSqlReq](req)(r =>
+        if !StreamType.all.contains(r.spec.streamType) then err(Status.BadRequest, "データの種類が正しくありません")
+        else streams.find(r.spec.streamType, r.spec.stream.trim).flatMap {
+          case None => err(Status.BadRequest, "ストリーム（メトリクス）が見つかりません")
+          case Some(st) =>
+            streams.fields(st.id).flatMap { fs =>
+              val labels  = fs.map(_.name).filterNot(n => n == Columns.Timestamp || n == "value" || n == "__name__" || n == "__type__")
+              val numeric = fs.filter(f => f.fieldType == "int64" || f.fieldType == "float64").map(_.name).toSet
+              QueryBuilder.panel(r.spec, r.kind, labels, numeric) match
+                case Left(e)          => err(Status.BadRequest, e)
+                case Right((sql, u))  => Ok(PanelSqlDto(sql, u))
+            }
+        }))
+
     case req @ GET -> Root / "api" / "streams" / TypeVar(t) / name =>
       authed(req)(s => withStream(s, t, name)(st =>
         (streams.dto(st.id, cfg.retentionDays), streams.fields(st.id)).tupled.flatMap {

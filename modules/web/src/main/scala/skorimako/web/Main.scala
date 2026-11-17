@@ -15,6 +15,8 @@ object Main {
     ScalactiveConfig.titleTemplate = "%s | skorimako"
     ScalactiveConfig.defaultTitle = Some("skorimako")
     Theme.apply()
+    // PWA（ホーム画面に追加・オフラインで開く・アラートのプッシュ通知）
+    Pwa.register()
     App()(dom.document.body, AddMethod.appendS(IdSelector("app"))).init()
   }
 

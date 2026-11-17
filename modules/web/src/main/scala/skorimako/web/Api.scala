@@ -71,6 +71,8 @@ object Api {
   // ---------------------------------------------------------------- データ
 
   def streams(streamType: Option[String] = None): Future[List[StreamDto]] = get[List[StreamDto]]("/api/streams" + query("type" -> streamType))
+  def serviceNames: Future[List[String]] = get[List[String]]("/api/service-names")
+  def metricServices: Future[Map[String, List[String]]] = get[Map[String, List[String]]]("/api/metrics/services")
   def stream(streamType: String, name: String): Future[StreamDetailDto] = get[StreamDetailDto](s"/api/streams/$streamType/${enc(name)}")
   def sql(r: SqlQueryReq): Future[QueryResultDto] = post[QueryResultDto]("/api/query/sql", r.asJson)
   def logs(r: LogSearchReq): Future[LogSearchDto] = post[LogSearchDto]("/api/query/logs", r.asJson)

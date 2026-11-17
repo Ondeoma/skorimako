@@ -1,6 +1,35 @@
 <configuration>
-  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-    <encoder><pattern>%d{HH:mm:ss.SSS} %-5level %logger{20} - %msg%n</pattern></encoder>
+  <!--
+    アプリのログ.
+     - 標準出力: LOG_FORMAT=text（既定. 人が読む形）か json（1行1つの JSON. ログを集める仕組み向け）
+    LOG_LEVEL で全体の水準を変えられる（既定 INFO）.
+    skorimako は自分の警告・エラーを自己監視（SelfMonitor）で自分のログのストリームに取り込むので、OTLP では送らない.
+  -->
+  <statusListener class="ch.qos.logback.core.status.NopStatusListener"/>
+
+  <appender name="STDOUT_text" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] %logger{24} - %msg%n%ex</pattern>
+    </encoder>
   </appender>
-  <root level="INFO"><appender-ref ref="STDOUT"/></root>
+
+  <appender name="STDOUT_json" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="ch.qos.logback.classic.encoder.JsonEncoder">
+      <withSequenceNumber>false</withSequenceNumber>
+      <withNanoseconds>false</withNanoseconds>
+      <withContext>false</withContext>
+      <withFormattedMessage>true</withFormattedMessage>
+      <withMessage>false</withMessage>
+      <withArguments>false</withArguments>
+    </encoder>
+  </appender>
+
+  <!-- うるさいライブラリ -->
+  <logger name="org.http4s.ember" level="WARN"/>
+  <logger name="org.flywaydb" level="WARN"/>
+  <logger name="com.zaxxer.hikari" level="WARN"/>
+
+  <root level="${LOG_LEVEL:-INFO}">
+    <appender-ref ref="STDOUT_${LOG_FORMAT:-text}"/>
+  </root>
 </configuration>

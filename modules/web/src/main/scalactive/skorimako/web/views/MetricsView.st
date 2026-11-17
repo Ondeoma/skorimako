@@ -24,7 +24,8 @@ case class State(metrics: RV[List[StreamDto]] = RV(Nil),
                  mode: RV[String] = RV(if (Query.get("promql").isDefined) "promql" else "builder"),
                  promql: RV[String] = RV(Query.get("promql").getOrElse("")),
                  promChart: RV[ChartSpec] = RV(ChartSpec("line", Nil, height = 320)),
-                 promError: RV[String] = RV(""))
+                 promError: RV[String] = RV(""),
+                 services: RV[Map[String, List[String]]] = RV(Map.empty))
 
 def initState() = State()
 
@@ -32,6 +33,8 @@ val notLabels = Set(Columns.Timestamp, "value", "__name__", "__type__")
 
 def mounted(s: State): Unit = {
   pageTitle("メトリクス")
+  Query.get("service").foreach(Store.setService)
+  Api.metricServices.foreach(s.services := _)
   Store.report(Api.streams(Some(StreamType.Metrics))) { ms =>
     s.metrics := ms
     if (s.metric.v.isEmpty) ms.headOption.foreach(m => s.metric := m.name)
@@ -94,7 +97,7 @@ def run(s: State): Unit = if (s.metric.v.nonEmpty) {
   val (start, end) = Store.range.v.micros
   s.loading := true; s.error := ""
   val unit = s.info.v.map(_.unit).getOrElse("")
-  Api.metrics(MetricQueryReq(s.metric.v, start, end, s.agg.v, s.groupBy.v, Some(s.where.v), s.step.v.toIntOption)).onComplete {
+  Api.metrics(MetricQueryReq(s.metric.v, start, end, s.agg.v, s.groupBy.v, Some(Store.serviceWhere(s.where.v)), s.step.v.toIntOption)).onComplete {
     case Success(r) =>
       s.loading := false; s.result := Some(r)
       s.chart := ChartSpec("line", r.series.map(x => ChartSeries(label(x), x.points.map(p => (p.t / 1000.0, p.v)))), unit = if (s.agg.v == "rate") (if (unit.isEmpty || unit == "1") "/s" else unit + "/s") else unit,
@@ -107,7 +110,13 @@ def label(x: SeriesDto): String = if (x.labels.isEmpty) "全体" else x.labels.t
 
 def toggleGroup(s: State, l: String): Unit = { s.groupBy := (if (s.groupBy.v.contains(l)) s.groupBy.v.filterNot(_ == l) else s.groupBy.v :+ l); run(s) }
 
-def filtered(s: State) = computed { val q = s.q.v.trim.toLowerCase; s.metrics.v.filter(m => q.isEmpty || m.name.contains(q)).take(500) }
+def filtered(s: State) = computed {
+  val q = s.q.v.trim.toLowerCase
+  val svc = Store.service.v
+  s.metrics.v.filter(m => (q.isEmpty || m.name.contains(q)) && (svc.isEmpty || s.services.v.getOrElse(m.name, Nil).contains(svc))).take(500)
+}
+
+def servicesOf(s: State, name: String) = s.services.mapC(_.getOrElse(name, Nil).mkString(" · "))
 def itemCls(s: State, n: String) = s.metric.mapC(m => if (m == n) "list-item active" else "list-item")
 def groupCls(s: State, l: String) = s.groupBy.mapC(g => if (g.contains(l)) "chip active" else "chip")
 def series(s: State) = s.result.mapC(_.map(_.series).getOrElse(Nil))
@@ -130,7 +139,7 @@ def typeLabel(t: String): String = t match {
 
 <template>
   <div class="page wide">
-    <div class="toolbar"><h1 class="grow">メトリクス</h1><TimeRange /></div>
+    <div class="toolbar"><h1 class="grow">メトリクス</h1><ServicePicker /><TimeRange /></div>
     <nav class="tabs">
       <button :class='modeCls(s, "builder")' @click='setMode(s, "builder")'>選んで表示</button>
       <button :class='modeCls(s, "promql")' @click='setMode(s, "promql")'>PromQL</button>
@@ -150,7 +159,9 @@ def typeLabel(t: String): String = t match {
     <div class="split">
       <aside>
         <input type="search" v-model="s.q" placeholder="メトリクスを探す" class="fq">
-        <div v-for="m in filtered(s)" :key="m.id" :class="itemCls(s, m.name)" @click="select(s, m.name)" :title="m.description">{{ m.name }}</div>
+        <div v-for="m in filtered(s)" :key="m.id" :class="itemCls(s, m.name)" @click="select(s, m.name)" :title="m.description" style="flex-direction: column; align-items: stretch; gap: 0">
+          <div class="nm">{{ m.name }}</div><div class="svc">{{ servicesOf(s, m.name) }}</div>
+        </div>
       </aside>
       <div v-if="s.metric.mapC(_.nonEmpty)">
         <h2 class="mono">{{ s.metric }}</h2>
@@ -188,6 +199,8 @@ def typeLabel(t: String): String = t match {
 
 <style scoped>
 .fq { width: 100%; margin-bottom: .3rem; }
+.nm { overflow: hidden; text-overflow: ellipsis; }
+.svc { font-size: .72rem; color: var(--muted); font-weight: normal; line-height: 1.2; }
 h2 { margin-top: 0; word-break: break-all; }
 .groups { margin-bottom: .6rem; align-items: center; }
 .series { margin-top: .8rem; }
