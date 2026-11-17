@@ -1,0 +1,25 @@
+# /etc/systemd/system/skorimako.service
+[Unit]
+Description=skorimako application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=skorimako
+Group=skorimako
+EnvironmentFile=/etc/skorimako/skorimako.env
+# ヒープとは別に、検索（DuckDB）が DUCKDB_MEMORY × QUERY_CONCURRENCY までネイティブのメモリを使う
+ExecStart=/usr/bin/java -Xms512m -Xmx2g -cp '/opt/skorimako/current/lib/*' skorimako.app.Main
+# 停止時は処理中のリクエストを少し待ってから終わる（他ノードがそのまま受ける）
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# 取り込みの WAL・検索のキャッシュ（DATA_DIR）
+ReadWritePaths=/var/lib/skorimako
+
+[Install]
+WantedBy=multi-user.target
