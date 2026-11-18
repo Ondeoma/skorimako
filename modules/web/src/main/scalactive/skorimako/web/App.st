@@ -43,7 +43,7 @@ def mounted(s: State): Unit = {
   }
 }
 
-def logout(): Unit = Api.logout().foreach(_ => dom.window.location.href = "/")
+def logout(): Unit = Api.logout().onComplete(r => dom.window.location.href = r.getOrElse("/"))
 
 val nav: List[(String, String, String)] = List(
   ("/", "🏠", "ホーム"),
