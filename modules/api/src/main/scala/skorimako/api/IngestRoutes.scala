@@ -30,9 +30,16 @@ final class IngestService(ingester: Ingester, transform: Transform):
       case Right(b) => ingester.ingest(streamType, b).map(_.left.map(Reject(503, _)))
     }
 
-final class IngestRoutes(ingest: IngestService, apps: AppStore, val sessions: SessionAuth, cfg: ApiConfig) extends RouteSupport:
-
+object IngestRoutes:
   private val Protobuf = MediaType.unsafeParse("application/x-protobuf")
+
+  /** OTLP の応答（protobuf なら空のメッセージ＝本文 0 バイト、JSON なら {}）。
+    * 本文に Array[Byte] を渡すと circe の EntityEncoder で JSON の配列 [] になり、Collector が protobuf として読めないので、本文は付けない. */
+  def otlpOk(json: Boolean): IO[Response[IO]] =
+    if json then IO.pure(Response[IO](Status.Ok).withEntity(Json.obj()))
+    else IO.pure(Response[IO](Status.Ok).withContentType(`Content-Type`(Protobuf)))
+
+final class IngestRoutes(ingest: IngestService, apps: AppStore, val sessions: SessionAuth, cfg: ApiConfig) extends RouteSupport:
 
   /** 本文（gzip・deflate なら展開する。展開後の大きさにも上限）。 */
   def bytes(req: Request[IO]): IO[Either[String, Array[Byte]]] =
@@ -72,10 +79,6 @@ final class IngestRoutes(ingest: IngestService, apps: AppStore, val sessions: Se
       case Left(r)  => err(Status.fromInt(r.status).getOrElse(Status.ServiceUnavailable), r.message).map(_.putHeaders("Retry-After" -> "5"))
     }
 
-  /** OTLP の応答（protobuf なら空のメッセージ、JSON なら {}）。 */
-  private def otlpOk(json: Boolean): IO[Response[IO]] =
-    if json then Ok(Json.obj())
-    else IO.pure(Response[IO](Status.Ok).withEntity(Array.emptyByteArray).withContentType(`Content-Type`(Protobuf)))
 
   private def otlp(req: Request[IO], streamType: String)(parse: (Array[Byte], Boolean, String, Long) => Either[String, Batch]): IO[Response[IO]] =
     ingestAuth(req) { _ =>
@@ -88,7 +91,7 @@ final class IngestRoutes(ingest: IngestService, apps: AppStore, val sessions: Se
               val json = isJson(req)
               IO.realTime.map(_.toMicros).flatMap(now => IO(parse(b, json, stream, now))).flatMap {
                 case Left(e)      => err(Status.BadRequest, e)
-                case Right(batch) => accept(streamType, batch)(_ => otlpOk(json))
+                case Right(batch) => accept(streamType, batch)(_ => IngestRoutes.otlpOk(json))
               }
           }
     }
