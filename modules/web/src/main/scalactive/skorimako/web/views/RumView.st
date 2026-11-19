@@ -78,7 +78,7 @@ def load(s: State): Unit = current(s).foreach { a =>
     .foreach(r => s.errors := Some(r))
   q(s, s"""SELECT browser AS "ブラウザ", os AS "OS", device AS "端末", count(DISTINCT session_id) AS "セッション"
            |FROM $from WHERE $w GROUP BY 1, 2, 3 ORDER BY 4 DESC LIMIT 20""".stripMargin).foreach(r => s.browsers := Some(r))
-  q(s, s"""SELECT request_url AS "URL", status AS "HTTP", count(*) AS "件数", round(avg(duration)) AS "平均(ms)"
+  q(s, s"""SELECT request_url AS "url", status AS "HTTP", count(*) AS "件数", round(avg(duration)) AS "平均(ms)"
            |FROM $from WHERE $w AND event_type = 'resource_error' GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 30""".stripMargin)
     .foreach(r => s.failures := Some(r))
 }

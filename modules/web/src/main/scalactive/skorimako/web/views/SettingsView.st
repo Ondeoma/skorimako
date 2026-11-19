@@ -22,9 +22,9 @@ def mounted(s: State): Unit = {
   // stui の許可の画面から戻ったとき（?integration=stui&result=connected）
   Query.get("integration").foreach { p =>
     Query.get("result") match {
-      case Some("connected") => Store.toast(s"$p と連携しました")
-      case Some("denied")    => Store.toast(s"$p との連携は許可されませんでした", error = true)
-      case _                 => Store.toast(s"$p と連携できませんでした。もう一度お試しください", error = true)
+      case Some("connected") => Store.toast(s"${AppNames.nameOf(p)} と連携しました")
+      case Some("denied")    => Store.toast(s"${AppNames.nameOf(p)} との連携は許可されませんでした", error = true)
+      case _                 => Store.toast(s"${AppNames.nameOf(p)} と連携できませんでした。もう一度お試しください", error = true)
     }
     Query.replace()
   }
@@ -155,12 +155,12 @@ def visibleScopes = Store.isAdmin.mapC(a => KeyScope.all.filter(sc => a || sc !=
       <select :value="Theme.current" @change="Theme.set(Dom.value(event))"><option v-for="o in Theme.options" :value="o._1">{{ o._2 }}</option></select></label>
 
     <h2>通知</h2>
-    <p class="muted small">あなたが作ったアラートのルールと、あなた宛ての stui の DM を通知先にしたルールが、発生・解消したときに届きます（ミュート中は届きません）。</p>
+    <p class="muted small">あなたが作ったアラートのルールと、あなた宛ての {{ AppNames.of("stui") }} の DM を通知先にしたルールが、発生・解消したときに届きます（ミュート中は届きません）。</p>
     <p><PushToggle /></p>
 
     <template v-for="i in s.integrations">
       <h2>{{ i.name }} との連携</h2>
-      <p class="muted small">連携すると、アラートをあなたの {{ i.name }} の DM に送れます（アラート → 通知先 →「自分の stui の DM を通知先にする」）。</p>
+      <p class="muted small">連携すると、アラートをあなたの {{ i.name }} の DM に送れます（アラート → 通知先 →「自分の {{ i.name }} の DM を通知先にする」）。</p>
       <p v-if="i.connected" class="row"><span class="ok">✓ 連携しています</span><button class="small" @click="disconnect(s, i)">連携をやめる</button></p>
       <p v-else><button class="primary" @click="connect(i.provider)">{{ i.name }} と連携する</button></p>
     </template>

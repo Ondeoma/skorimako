@@ -1,7 +1,6 @@
 <script lang="scala">
 import io.github.ondeoma.scalactive.components.routes.RouterComponent
 import org.scalajs.dom
-import skorimako.shared.*
 import skorimako.web.parts.*
 import skorimako.web.views.*
 
@@ -39,6 +38,7 @@ def mounted(s: State): Unit = {
   if (dom.window.location.pathname.startsWith("/login")) s.ready := true
   else Store.report(Api.me()) { me =>
     Store.me := Some(me)
+    AppNames.set(me.appNames)
     s.ready := true
   }
 }
@@ -69,7 +69,7 @@ def sideClass = Store.sideOpen.mapC(o => if (o) "side open" else "side")
 <template>
   <div class="shell">
     <aside v-if="loggedIn" :class="sideClass">
-      <a href="/" class="brand" @click.prevent='Store.go("/")'><img src="/logo.svg" alt="" width="28" height="28"><span>skorimako</span></a>
+      <a href="/" class="brand" @click.prevent='Store.go("/")'><img :src='AppNames.logo("/logo.svg").v' alt="" height="28" class="brand-logo"><span>{{ AppNames.self }}</span></a>
       <nav class="scroll">
         <a v-for="n in nav" :href="n._1" :class="navCls(n._1)" @click.prevent="Store.go(n._1)"><span class="ic">{{ n._2 }}</span><span class="name">{{ n._3 }}</span></a>
       </nav>
@@ -83,7 +83,7 @@ def sideClass = Store.sideOpen.mapC(o => if (o) "side open" else "side")
     <div class="main">
       <header v-if="loggedIn" class="top only-sp">
         <button class="ghost" @click="Store.sideOpen := !Store.sideOpen.v">☰</button>
-        <img src="/logo.svg" alt="" width="24" height="24"><b>skorimako</b>
+        <img :src='AppNames.logo("/logo.svg").v' alt="" height="24" class="brand-logo"><b>{{ AppNames.self }}</b>
       </header>
       <main class="content">
         <RouterComponent v-if="s.ready" :routes="routes" />
@@ -104,6 +104,7 @@ def sideClass = Store.sideOpen.mapC(o => if (o) "side open" else "side")
 .side { width: 220px; flex: none; background: var(--side-bg); color: var(--side-fg); display: flex; flex-direction: column; min-height: 0; }
 .brand { display: flex; align-items: center; gap: .5rem; padding: .9rem 1rem; color: var(--side-fg); font-weight: 700; font-size: 1.05rem; }
 .brand:hover { text-decoration: none; }
+.brand-logo { display: block; width: auto; max-width: 120px; }
 .scroll { flex: 1; overflow-y: auto; padding: .2rem .5rem; }
 .item { display: flex; align-items: center; gap: .55rem; padding: .45rem .6rem; border-radius: 7px; color: var(--side-fg); font-size: .92rem; margin-bottom: 1px; }
 .item:hover { background: var(--side-hover); text-decoration: none; }

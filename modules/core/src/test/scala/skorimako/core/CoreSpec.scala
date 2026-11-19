@@ -4,7 +4,7 @@ import skorimako.shared.{AlertHitDto, AlertState}
 
 import java.time.Instant
 
-class CoreSpec extends munit.FunSuite:
+class CoreSpec extends munit.FunSuite {
 
   test("列名とストリーム名の規則") {
     assertEquals(Names.column("service.name"), Some("service_name"))
@@ -42,7 +42,8 @@ class CoreSpec extends munit.FunSuite:
   }
 
   test("メトリクスの SQL: rate はラベルごとに差を取る") {
-    val sql = QueryBuilder.metric("m", "rate", List("route"), Nil, 60000000L, List("route", "service_name")).toOption.get
+    val sql =
+      QueryBuilder.metric("m", "rate", List("route"), Nil, 60000000L, List("route", "service_name")).toOption.get
     assert(sql.contains("PARTITION BY \"route\", \"service_name\""))
     assert(sql.contains("/ 60.0"))
     assert(QueryBuilder.metric("m", "bogus", Nil, Nil, 1L, Nil).isLeft)
@@ -51,18 +52,27 @@ class CoreSpec extends munit.FunSuite:
   test("アラートの状態の移り変わり") {
     val now = Instant.parse("2026-11-17T00:00:00Z")
     assertEquals(AlertLogic.next(AlertState.Ok, true, None, 0, now), (AlertState.Firing, AlertLogic.Action.Fire))
-    assertEquals(AlertLogic.next(AlertState.Firing, true, Some(now.minusSeconds(60)), 0, now), (AlertState.Firing, AlertLogic.Action.None))
-    assertEquals(AlertLogic.next(AlertState.Firing, true, Some(now.minusSeconds(3600)), 30, now), (AlertState.Firing, AlertLogic.Action.Fire))
+    assertEquals(
+      AlertLogic.next(AlertState.Firing, true, Some(now.minusSeconds(60)), 0, now),
+      (AlertState.Firing, AlertLogic.Action.None)
+    )
+    assertEquals(
+      AlertLogic.next(AlertState.Firing, true, Some(now.minusSeconds(3600)), 30, now),
+      (AlertState.Firing, AlertLogic.Action.Fire)
+    )
     assertEquals(AlertLogic.next(AlertState.Firing, false, None, 0, now), (AlertState.Ok, AlertLogic.Action.Resolve))
     assertEquals(AlertLogic.next(AlertState.Ok, false, None, 0, now), (AlertState.Ok, AlertLogic.Action.None))
     assertEquals(AlertLogic.describe(List(AlertHitDto(Some("api"), 12.0)), ">", 5), "api: 12（条件 > 5）")
   }
+}
 
-class PruneSpec extends munit.FunSuite:
+class PruneSpec extends munit.FunSuite {
 
   test("一番外側が AND の 列 = 値・列 IN (…) だけを取り出す") {
-    assertEquals(Prune.constraints(Some("service_name = 'api' AND severity_text IN ('ERROR', 'WARN') AND duration > 5")),
-      Map("service_name" -> Set("api"), "severity_text" -> Set("ERROR", "WARN")))
+    assertEquals(
+      Prune.constraints(Some("service_name = 'api' AND severity_text IN ('ERROR', 'WARN') AND duration > 5")),
+      Map("service_name" -> Set("api"), "severity_text" -> Set("ERROR", "WARN"))
+    )
     assertEquals(Prune.constraints(Some("a = 'x' OR b = 'y'")), Map.empty)
     assertEquals(Prune.constraints(Some("(a = 'x') AND (b = 'y' OR c = 'z')")), Map("a" -> Set("x")))
     assertEquals(Prune.constraints(Some("NOT a = 'x'")), Map.empty)
@@ -76,9 +86,12 @@ class PruneSpec extends munit.FunSuite:
   }
 
   test("値の一覧は種類の少ない文字列の列だけ。まとめると和になる") {
-    val rows = (1 to 50).map(i => Row(i, Map("svc" -> Value.Str(if i % 2 == 0 then "a" else "b"), "id" -> Value.Str(s"id$i"), "n" -> Value.Int(i))))
+    val rows = (1 to 50).map(i =>
+      Row(i, Map("svc" -> Value.Str(if i % 2 == 0 then "a" else "b"), "id" -> Value.Str(s"id$i"), "n" -> Value.Int(i)))
+    )
     val t = Prune.tags(rows)
     assertEquals(t, Map("svc" -> List("a", "b")))
     assertEquals(Prune.mergeTags(List(t, Map("svc" -> List("c")))), Map("svc" -> List("a", "b", "c")))
     assertEquals(Prune.mergeTags(List(t, Map.empty)), Map.empty)
   }
+}

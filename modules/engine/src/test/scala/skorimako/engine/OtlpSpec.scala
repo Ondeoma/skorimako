@@ -3,7 +3,7 @@ package skorimako.engine
 import io.circe.parser.parse
 import skorimako.core.*
 
-class OtlpSpec extends munit.FunSuite:
+class OtlpSpec extends munit.FunSuite {
 
   test("OTLP/JSON のログ: 属性は列に、traceId は16進数のまま") {
     val body =
@@ -34,7 +34,8 @@ class OtlpSpec extends munit.FunSuite:
   }
 
   test("JSON のログ: 時刻の桁を見分け、入れ子は _ でつなぐ") {
-    val rows = JsonRows.logs(parse("""[{"ts": 1700000000123, "a": {"b": 1}, "msg": "x"}]""").toOption.get, 0L, 10).toOption.get
+    val rows =
+      JsonRows.logs(parse("""[{"ts": 1700000000123, "a": {"b": 1}, "msg": "x"}]""").toOption.get, 0L, 10).toOption.get
     assertEquals(rows.head.ts, 1700000000123000L)
     assertEquals(rows.head.fields.get("a_b"), Some(Value.Int(1)))
   }
@@ -47,24 +48,37 @@ class OtlpSpec extends munit.FunSuite:
     assert(SqlText.checkCondition("a = 1) or (1=1").isLeft)
     assert(SqlText.checkCondition("a = ';'").isRight)
   }
+}
 
-class OtlpProtobufSpec extends munit.FunSuite:
+class OtlpProtobufSpec extends munit.FunSuite {
   import com.google.protobuf.ByteString
   import io.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest
   import io.opentelemetry.proto.common.v1.{AnyValue, KeyValue}
   import io.opentelemetry.proto.resource.v1.Resource
   import io.opentelemetry.proto.trace.v1.{ResourceSpans, ScopeSpans, Span, Status}
 
-  private def kv(k: String, v: String) = KeyValue.newBuilder().setKey(k).setValue(AnyValue.newBuilder().setStringValue(v)).build()
+  private def kv(
+    k: String,
+    v: String
+  ) = KeyValue.newBuilder().setKey(k).setValue(AnyValue.newBuilder().setStringValue(v)).build()
 
   test("OTLP/protobuf のスパン: 所要時間・状態・サービス名、トレースの索引") {
     val trace = ByteString.copyFrom(Array.tabulate[Byte](16)(i => (i + 1).toByte))
-    def span(id: Int, parent: Option[Int], name: String, start: Long, end: Long, err: Boolean) =
-      val b = Span.newBuilder().setTraceId(trace).setSpanId(ByteString.copyFrom(Array.fill[Byte](8)(id.toByte))).setName(name)
-        .setKind(Span.SpanKind.SPAN_KIND_SERVER).setStartTimeUnixNano(start).setEndTimeUnixNano(end)
+    def span(
+      id: Int,
+      parent: Option[Int],
+      name: String,
+      start: Long,
+      end: Long,
+      err: Boolean
+    ) = {
+      val b =
+        Span.newBuilder().setTraceId(trace).setSpanId(ByteString.copyFrom(Array.fill[Byte](8)(id.toByte))).setName(name)
+          .setKind(Span.SpanKind.SPAN_KIND_SERVER).setStartTimeUnixNano(start).setEndTimeUnixNano(end)
       parent.foreach(p => b.setParentSpanId(ByteString.copyFrom(Array.fill[Byte](8)(p.toByte))))
       if err then b.setStatus(Status.newBuilder().setCode(Status.StatusCode.STATUS_CODE_ERROR).setMessage("boom"))
       b.build()
+    }
     val req = ExportTraceServiceRequest.newBuilder().addResourceSpans(ResourceSpans.newBuilder()
       .setResource(Resource.newBuilder().addAttributes(kv("service.name", "api")))
       .addScopeSpans(ScopeSpans.newBuilder()
@@ -85,3 +99,4 @@ class OtlpProtobufSpec extends munit.FunSuite:
   test("壊れた protobuf は Left") {
     assert(Otlp.logs(Array[Byte](1, 2, 3, 4, 5), json = false, "default", 0L).isLeft)
   }
+}

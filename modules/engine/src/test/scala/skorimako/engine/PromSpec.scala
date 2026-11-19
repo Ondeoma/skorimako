@@ -4,25 +4,38 @@ import skorimako.core.*
 import skorimako.core.PromQL.Expr
 import skorimako.shared.*
 
-class PromSpec extends munit.FunSuite:
+class PromSpec extends munit.FunSuite {
 
-  private def parse(q: String): Expr = PromQL.parse(q).fold(e => fail(e), identity)
+  private def parse(
+    q: String
+  ): Expr = PromQL.parse(q).fold(e => fail(e), identity)
 
   /** 15秒ごと・20点のカウンター（1秒あたり rate ずつ増える）。 */
-  private def counter(labels: Map[String, String], rate: Double, end: Long): Prom.Series =
+  private def counter(
+    labels: Map[String, String],
+    rate: Double,
+    end: Long
+  ): Prom.Series = {
     val ts = (0 until 20).map(i => end - (19 - i) * 15000L).toArray
     Prom.Series(labels, ts, ts.indices.map(i => 100 + i * 15 * rate).toArray)
+  }
 
   private val end = 1700000000000L
   private val data = (q: String) =>
-    PromQL.selectors(parse(q)).map(_.copy(range = None, offset = 0)).map(s => s -> List(
-      counter(Map("__name__" -> "jobs_total", "job" -> "w", "instance" -> "a"), 1, end),
-      counter(Map("__name__" -> "jobs_total", "job" -> "w", "instance" -> "b"), 2, end))).toMap
+    PromQL.selectors(parse(q)).map(_.copy(range = None, offset = 0)).map(s =>
+      s -> List(
+        counter(Map("__name__" -> "jobs_total", "job" -> "w", "instance" -> "a"), 1, end),
+        counter(Map("__name__" -> "jobs_total", "job" -> "w", "instance" -> "b"), 2, end)
+      )
+    ).toMap
 
-  private def vec(q: String): List[(Prom.Labels, Double)] =
-    Prom.instant(parse(q), data(q), end) match
+  private def vec(
+    q: String
+  ): List[(Prom.Labels, Double)] =
+    Prom.instant(parse(q), data(q), end) match {
       case Prom.Result.Vec(_, xs) => xs.sortBy(_._1.toString)
-      case other                  => fail(s"vector ではありません: $other")
+      case other => fail(s"vector ではありません: $other")
+    }
 
   test("構文: セレクター・範囲・集計・二項演算・関数") {
     assert(PromQL.parse("""sum by (job) (rate(http_requests_total{code=~"5..", method!="GET"}[5m])) / 2""").isRight)
@@ -54,36 +67,77 @@ class PromSpec extends munit.FunSuite:
     val buckets = List("10" -> 10.0, "100" -> 30.0, "+Inf" -> 40.0)
     val q = "histogram_quantile(0.5, h_bucket)"
     val sel = PromQL.selectors(parse(q)).head
-    val d = Map(sel -> buckets.map((le, c) => Prom.Series(Map("le" -> le), Array(end), Array(c))))
-    Prom.instant(parse(q), d, end) match
-      case Prom.Result.Vec(_, List((_, v))) => assertEqualsDouble(v, 10 + 90 * (20 - 10) / 20.0, 0.001) // 順位 20 は 2つ目の区間の真ん中
+    val d = Map(sel -> buckets.map(
+      (
+        le,
+        c
+      ) => Prom.Series(Map("le" -> le), Array(end), Array(c))
+    ))
+    Prom.instant(parse(q), d, end) match {
+      case Prom.Result.Vec(_, List((_, v))) =>
+        assertEqualsDouble(v, 10 + 90 * (20 - 10) / 20.0, 0.001) // 順位 20 は 2つ目の区間の真ん中
       case other => fail(other.toString)
+    }
   }
 
   test("範囲の問い合わせは step ごとの点") {
     val q = "sum(rate(jobs_total[1m]))"
-    Prom.range(parse(q), data(q), end - 120000, end, 60000) match
+    Prom.range(parse(q), data(q), end - 120000, end, 60000) match {
       case Prom.Result.Matrix(List((_, pts))) => assertEquals(pts.size, 3); assertEqualsDouble(pts.last._2, 3.0, 0.01)
       case other => fail(other.toString)
+    }
   }
+}
 
-class TransformSpec extends munit.FunSuite:
+class TransformSpec extends munit.FunSuite {
 
-  private def rule(kind: String, field: String = "", pattern: String = "", replacement: String = "", ratio: Double = 1) =
-    Transform.compile(IngestRuleDto(java.util.UUID.randomUUID(), StreamType.Logs, "x", 0, kind, field, pattern, replacement, ratio, true)).get
+  private def rule(
+    kind: String,
+    field: String = "",
+    pattern: String = "",
+    replacement: String = "",
+    ratio: Double = 1
+  ) =
+    Transform.compile(IngestRuleDto(
+      java.util.UUID.randomUUID(),
+      StreamType.Logs,
+      "x",
+      0,
+      kind,
+      field,
+      pattern,
+      replacement,
+      ratio,
+      true
+    )).get
 
-  private val row = Row(1L, Map("body" -> Value.Str("mail taro@example.com card 4111 1111 1111 1111 token=abc123"), "k8s_pod" -> Value.Str("p"),
-    "k8s_ns" -> Value.Str("n"), "level" -> Value.Str("debug")))
+  private val row = Row(
+    1L,
+    Map(
+      "body" -> Value.Str("mail taro@example.com card 4111 1111 1111 1111 token=abc123"),
+      "k8s_pod" -> Value.Str("p"),
+      "k8s_ns" -> Value.Str("n"),
+      "level" -> Value.Str("debug")
+    )
+  )
 
   test("既定の型で伏せる") {
-    val r = Seq("email", "card", "token").foldLeft(Option(row))((acc, p) => acc.flatMap(rule(IngestRuleKind.Mask, "body", p).run))
+    val r = Seq("email", "card", "token").foldLeft(Option(row))(
+      (
+        acc,
+        p
+      ) => acc.flatMap(rule(IngestRuleKind.Mask, "body", p).run)
+    )
     assertEquals(r.flatMap(_.str("body")), Some("mail ***@*** card ****-****-****-**** token=***"))
   }
 
   test("列を落とす（前方一致）・行を捨てる・名前を変える") {
     assertEquals(rule(IngestRuleKind.DropField, "k8s_*").run(row).map(_.fields.keySet), Some(Set("body", "level")))
     assertEquals(rule(IngestRuleKind.DropRows, "level", "^debug$").run(row), None)
-    assertEquals(rule(IngestRuleKind.Rename, "level", replacement = "severity").run(row).flatMap(_.str("severity")), Some("debug"))
+    assertEquals(
+      rule(IngestRuleKind.Rename, "level", replacement = "severity").run(row).flatMap(_.str("severity")),
+      Some("debug")
+    )
   }
 
   test("間引きはトレースごとにそろう") {
@@ -93,8 +147,13 @@ class TransformSpec extends munit.FunSuite:
   }
 
   test("ルールの検査") {
-    def req(kind: String, field: String, pattern: String) = IngestRuleReq(StreamType.Logs, "x", 0, kind, field, pattern, "", 1, true)
+    def req(
+      kind: String,
+      field: String,
+      pattern: String
+    ) = IngestRuleReq(StreamType.Logs, "x", 0, kind, field, pattern, "", 1, true)
     assert(Transform.validate(req(IngestRuleKind.DropRows, "level", "(")).isLeft)
     assert(Transform.validate(req(IngestRuleKind.DropField, "", "")).isLeft)
     assert(Transform.validate(req(IngestRuleKind.Mask, "", "email")).isRight)
   }
+}

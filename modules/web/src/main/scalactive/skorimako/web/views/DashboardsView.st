@@ -3,7 +3,6 @@ import skorimako.web.*
 import skorimako.shared.*
 import io.circe.syntax.*
 
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
 // ダッシュボードの一覧と作成
 case class State(list: RV[List[DashboardBrief]] = RV(Nil))

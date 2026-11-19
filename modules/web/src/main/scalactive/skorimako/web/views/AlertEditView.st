@@ -226,7 +226,7 @@ def stateLine(s: State) = s.rule.mapC(_.map(r => s"${AlertState.label(r.state)}�
     <p v-if="s.allDests.mapC(_.isEmpty)" class="muted small">通知先がありません（<a href="/alerts?tab=dests" @click.prevent='Store.go("/alerts?tab=dests")'>通知先</a>で管理者が追加します）。
       通知先がなくても、状態と履歴は画面で見られます。</p>
     <label v-for="d in s.allDests" class="check"><input type="checkbox" :checked="destOn(s, d.id)" @change="toggleDest(s, d.id)"> {{ d.name }}
-      <span class="muted small">{{ DestinationKind.label(d.kind) }}</span></label>
+      <span class="muted small">{{ DestinationKind.label(d.kind, AppNames.nameOf("stui")) }}</span></label>
 
     <p v-if="s.error.mapC(_.nonEmpty)" class="error mono">{{ s.error }}</p>
     <div v-for="t in s.test.mapC(_.toList)" class="panel">

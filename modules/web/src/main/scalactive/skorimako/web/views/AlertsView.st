@@ -47,8 +47,8 @@ def stateLabel(r: AlertRuleDto): String = if (!r.enabled) "停止中" else Alert
 def flags(r: AlertRuleDto): String = List(r.ack.map(a => "👀 " + a.by.map(_.name).getOrElse("")), r.silencedUntil.map(_ => "🔕")).flatten.mkString(" ")
 
 def stuiDm(s: State): Unit = Store.me.v.foreach { me =>
-  Store.report(Api.post[DestinationDto]("/api/destinations", DestinationReq(s"${me.name} の stui の DM", DestinationKind.StuiDm, "", None, Some(me.id)).asJson)) { _ =>
-    Store.toast("自分の stui の DM を通知先に足しました"); load(s)
+  Store.report(Api.post[DestinationDto]("/api/destinations", DestinationReq(s"${me.name} の ${AppNames.nameOf("stui")} の DM", DestinationKind.StuiDm, "", None, Some(me.id)).asJson)) { _ =>
+    Store.toast(s"自分の ${AppNames.nameOf("stui")} の DM を通知先に足しました"); load(s)
   }
 }
 def stuiReady(s: State) = s.integrations.mapC(_.exists(i => i.provider == "stui" && i.connected))
@@ -111,7 +111,7 @@ def status(d: DeliveryDto): String = d.status match { case "sent" => "送信済�
     </nav>
 
     <div v-if='isTab(s, "rules")'>
-      <p v-if="s.rules.mapC(_.isEmpty)" class="empty">ルールはまだありません。ログの件数・メトリクスの値などに閾値を決めて、stui などに知らせられます。</p>
+      <p v-if="s.rules.mapC(_.isEmpty)" class="empty">ルールはまだありません。ログの件数・メトリクスの値などに閾値を決めて、{{ AppNames.of("stui") }} などに知らせられます。</p>
       <div v-else class="table-wrap">
         <table class="list">
           <thead><tr><th>状態</th><th>名前</th><th>対象</th><th>条件</th><th>値</th><th>評価</th><th></th></tr></thead>
@@ -139,11 +139,11 @@ def status(d: DeliveryDto): String = d.status match { case "sent" => "送信済�
 
     <div v-if='isTab(s, "dests")'>
       <div class="hint">
-        <b>stui に知らせる</b>: stui のチャンネルの ⚙ →「連携・定期メッセージ」で受信 Webhook を作り、表示された URL を貼ります。発生・解消をそのチャンネルに投稿します。<br>
+        <b>{{ AppNames.of("stui") }} に知らせる</b>: {{ AppNames.of("stui") }} のチャンネルの ⚙ →「連携・定期メッセージ」で受信 Webhook を作り、表示された URL を貼ります。発生・解消をそのチャンネルに投稿します。<br>
         <b>Slack・Mattermost 互換</b>: Incoming Webhook の URL。<b>Webhook</b>: JSON を POST します（署名の鍵を決めると <code>X-Skorimako-Signature: sha256=…</code> を付けます）。
       </div>
       <div v-for="d in s.dests" :key="d.id" class="panel row">
-        <b>{{ d.name }}</b><span class="badge">{{ DestinationKind.label(d.kind) }}</span><span class="muted small grow url">{{ d.url }}</span>
+        <b>{{ d.name }}</b><span class="badge">{{ DestinationKind.label(d.kind, AppNames.nameOf("stui")) }}</span><span class="muted small grow url">{{ d.url }}</span>
         <span v-for="u in d.targetUser.toList" class="small">→ {{ u.name }}</span>
         <template v-if="canEdit(d)">
           <button class="small" @click="test(d)">試しに送る</button>
@@ -153,11 +153,11 @@ def status(d: DeliveryDto): String = d.status match { case "sent" => "送信済�
       </div>
       <p class="row">
         <button v-if="Store.isAdmin" @click="editDest(s, None)">＋ 通知先を追加</button>
-        <button v-if="stuiReady(s)" @click="stuiDm(s)">＋ 自分の stui の DM を通知先にする</button>
+        <button v-if="stuiReady(s)" @click="stuiDm(s)">＋ 自分の {{ AppNames.of("stui") }} の DM を通知先にする</button>
       </p>
-      <p v-if="stuiConfigured(s).mapC(c => c && !stuiReady(s).v)" class="muted small">自分の stui の DM に知らせるには、
-        <a href="/settings" @click.prevent='Store.go("/settings")'>設定</a>で stui と連携してください。</p>
-      <p v-if="Store.isAdmin.mapC(!_)" class="muted small">通知先の追加・変更は管理者が行います（自分宛ての stui の DM は誰でも追加できます）。</p>
+      <p v-if="stuiConfigured(s).mapC(c => c && !stuiReady(s).v)" class="muted small">自分の {{ AppNames.of("stui") }} の DM に知らせるには、
+        <a href="/settings" @click.prevent='Store.go("/settings")'>設定</a>で {{ AppNames.of("stui") }} と連携してください。</p>
+      <p v-if="Store.isAdmin.mapC(!_)" class="muted small">通知先の追加・変更は管理者が行います（自分宛ての {{ AppNames.of("stui") }} の DM は誰でも追加できます）。</p>
     </div>
 
     <div v-if='isTab(s, "silences")'>
@@ -194,10 +194,10 @@ def status(d: DeliveryDto): String = d.status match { case "sent" => "送信済�
 
     <Modal v-for="e in s.editing.mapC(_.toList)" :onClose="_ => s.editing := None">
       <h2>{{ if (e.isDefined) "通知先を変える" else "通知先を追加" }}</h2>
-      <label class="field"><span>名前</span><input type="text" v-model="s.dName" placeholder="stui #運用"></label>
-      <label class="field"><span>種類</span><select v-model="s.dKind"><option v-for="k in DestinationKind.all.filterNot(_ == DestinationKind.StuiDm)" :value="k">{{ DestinationKind.label(k) }}</option></select></label>
+      <label class="field"><span>名前</span><input type="text" v-model="s.dName" :placeholder='AppNames.nameOf("stui") + " #運用"'></label>
+      <label class="field"><span>種類</span><select v-model="s.dKind"><option v-for="k in DestinationKind.all.filterNot(_ == DestinationKind.StuiDm)" :value="k">{{ DestinationKind.label(k, AppNames.nameOf("stui")) }}</option></select></label>
       <label class="field"><span>URL</span><input type="url" v-model="s.dUrl" placeholder="https://stui.example.com/hooks/…"></label>
-      <p v-if="isStui(s)" class="muted small">stui の受信 Webhook の URL（https://stui の URL/hooks/…）を貼ります。</p>
+      <p v-if="isStui(s)" class="muted small">{{ AppNames.of("stui") }} の受信 Webhook の URL（{{ AppNames.of("stui") }} の URL/hooks/…）を貼ります。</p>
       <label v-if="isWebhook(s)" class="field"><span>署名の鍵（任意。変えるときだけ入力）</span><input type="text" v-model="s.dSecret"></label>
       <div class="actions"><button @click="s.editing := None">キャンセル</button><button class="primary" @click="saveDest(s)">保存</button></div>
     </Modal>

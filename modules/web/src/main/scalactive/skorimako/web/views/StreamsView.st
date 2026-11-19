@@ -2,7 +2,6 @@
 import skorimako.web.*
 import skorimako.shared.*
 
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
 // ストリームの一覧（種類・行数・保存量・時刻の範囲・保持期間）
 case class State(list: RV[List[StreamDto]] = RV(Nil), t: RV[String] = RV(""), q: RV[String] = RV(""))

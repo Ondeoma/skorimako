@@ -2,7 +2,6 @@
 import skorimako.web.*
 import skorimako.shared.*
 
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
 // ホーム: 取り込んだデータの量、発生中のアラート、最近のアラートの履歴、ストリーム
 case class State(o: RV[Option[OverviewDto]] = RV(None))

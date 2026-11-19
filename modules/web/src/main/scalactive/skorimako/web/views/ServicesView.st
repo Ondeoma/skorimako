@@ -86,8 +86,8 @@ def svg(s: State) = computed {
      |markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/></marker></defs>$ls$ns</svg>""".stripMargin
 }
 
-def clickMap(s: State, e: org.scalajs.dom.Event): Unit =
-  Option(e.target.asInstanceOf[org.scalajs.dom.Element].closest("[data-name]")).foreach(el => pick(s, el.getAttribute("data-name")))
+def clickMap(s: State, e: Event): Unit =
+  Option(e.target.asInstanceOf[Element].closest("[data-name]")).foreach(el => pick(s, el.getAttribute("data-name")))
 
 def tracesLink(s: State) = s.selected.mapC(x => "/traces?service=" + Api.enc(x))
 def logsLink(s: State) = s.selected.mapC(x => "/logs?where=" + Api.enc(s"service_name = '$x'"))

@@ -5,7 +5,6 @@ import skorimako.shared.*
 import io.circe.syntax.*
 
 import java.util.UUID
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.scalajs.js
 
 // ダッシュボード: パネル（SQL → 折れ線・棒・数値・表）を並べる. 編集でパネルの追加・変更・並べ替え・削除.
