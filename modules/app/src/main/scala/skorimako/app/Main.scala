@@ -23,23 +23,22 @@ import skorimako.storage.{LocalObjectStore, ObjectStore, S3Config, S3ObjectStore
 import java.nio.file.Paths
 import scala.concurrent.duration.*
 
-final case class AppConfig(
-  port: Int,
-  db: DbConfig,
-  oidc: Option[OidcConfig],
-  api: ApiConfig,
-  staticDir: Option[String],
-  s3: Option[S3Config],
-  storageDir: Option[String],
-  dataDir: java.nio.file.Path,
-  appSecret: String,
-  nodeId: String,
-  ingest: IngestConfig,
-  query: QueryConfig,
-  duck: DuckConfig,
-  maintenance: MaintenanceConfig,
-  nodeUrl: Option[String],
-  selfMonitor: Boolean)
+final case class AppConfig(port: Int,
+                           db: DbConfig,
+                           oidc: Option[OidcConfig],
+                           api: ApiConfig,
+                           staticDir: Option[String],
+                           s3: Option[S3Config],
+                           storageDir: Option[String],
+                           dataDir: java.nio.file.Path,
+                           appSecret: String,
+                           nodeId: String,
+                           ingest: IngestConfig,
+                           query: QueryConfig,
+                           duck: DuckConfig,
+                           maintenance: MaintenanceConfig,
+                           nodeUrl: Option[String],
+                           selfMonitor: Boolean)
 
 object Main extends IOApp.Simple {
 
@@ -140,10 +139,7 @@ object Main extends IOApp.Simple {
     } yield ()
 
   /** DB（Patroni のプライマリ）が使えるまで待ってからマイグレーションする。複数ノード同時起動でも Flyway のロックで1回だけ適用される。 */
-  private def migrateWithRetry(
-    cfg: AppConfig,
-    attempt: Int = 1
-  ): IO[Int] =
+  private def migrateWithRetry(cfg: AppConfig, attempt: Int = 1): IO[Int] =
     Database.migrate(cfg.db).handleErrorWith { e =>
       if attempt >= 60 then IO.raiseError(e)
       else
@@ -151,9 +147,7 @@ object Main extends IOApp.Simple {
           IO.sleep(2.seconds) *> migrateWithRetry(cfg, attempt + 1)
     }
 
-  private def objectStore(
-    cfg: AppConfig
-  ): Resource[IO, ObjectStore] = cfg.s3 match {
+  private def objectStore(cfg: AppConfig): Resource[IO, ObjectStore] = cfg.s3 match {
     case Some(c) => S3ObjectStore.resource(c).evalTap(_.ensureBucket).widen[ObjectStore]
     case None =>
       val dir = Paths.get(cfg.storageDir.getOrElse("storage")).toAbsolutePath.normalize()
@@ -164,10 +158,7 @@ object Main extends IOApp.Simple {
   }
 
   /** ロードバランサー用のヘルスチェック。DB（プライマリ）に書けない状態なら 503。 */
-  private def healthRoutes(
-    xa: doobie.Transactor[IO],
-    node: String
-  ): HttpRoutes[IO] = HttpRoutes.of[IO] {
+  private def healthRoutes(xa: doobie.Transactor[IO], node: String): HttpRoutes[IO] = HttpRoutes.of[IO] {
     case GET -> Root / "healthz" =>
       sql"select not pg_is_in_recovery()".query[Boolean].unique.transact(xa).timeout(3.seconds).attempt.flatMap {
         case Right(true) => text(Status.Ok, s"ok $node")
@@ -176,43 +167,30 @@ object Main extends IOApp.Simple {
       }
   }
 
-  private def text(
-    status: Status,
-    body: String
-  ): IO[Response[IO]] =
+  private def text(status: Status, body: String): IO[Response[IO]] =
     IO.pure(Response[IO](status).withEntity(body)(using EntityEncoder.stringEncoder))
 
-  private def startupNotes(
-    cfg: AppConfig
-  ): IO[Unit] =
+  private def startupNotes(cfg: AppConfig): IO[Unit] =
     IO.whenA(
       cfg.oidc.isEmpty
     )(sbirds.observe.Log.println("[skorimako] WARNING: OIDC が未設定です。開発用のログイン（DEV_LOGIN）を使います。本番では使わないでください"))
 
   /** 本文の上限（Guards の EntityLimiter）を超えたら 413. */
-  private def tooLarge(
-    app: HttpApp[IO]
-  ): HttpApp[IO] = HttpApp[IO](req =>
+  private def tooLarge(app: HttpApp[IO]): HttpApp[IO] = HttpApp[IO](req =>
     app.run(req).adaptError { case _: org.http4s.server.middleware.EntityLimiter.EntityTooLarge =>
       AppError(ErrorCode.RequestTooLarge)
     }
   )
 
   /** 期限切れのセッション・古い監査ログ・アラートの履歴と送信の記録を消す（1ノードだけ）。 */
-  private def purgeLoop(
-    users: UserStore,
-    alerts: AlertStore,
-    lock: JobLock
-  ): IO[Unit] =
+  private def purgeLoop(users: UserStore, alerts: AlertStore, lock: JobLock): IO[Unit] =
     Periodic.run(10.minutes, 1.hour, ErrorCode.PurgeFailed)(lock.exclusive("purge", 50.minutes)(
       IO.realTimeInstant.flatMap(users.purgeExpired) *> users.purgeAudit(730).void *> alerts.purgeEvents(180).void *>
         alerts.purgeDeliveries(30).void
     ))
 
   /** ビルド済みの画面の配信。存在しないパスは index.html（SPA）。 */
-  private def spa(
-    dir: String
-  ): HttpRoutes[IO] = {
+  private def spa(dir: String): HttpRoutes[IO] = {
     val files = fileService[IO](FileService.Config(dir))
     val index = HttpRoutes.of[IO] {
       case req @ GET -> _
@@ -237,11 +215,7 @@ object Main extends IOApp.Simple {
     }
   }
 
-  extension [A](
-    a: A
-  ) {
-    private def |>[B](
-      f: A => B
-    ): B = f(a)
+  extension [A](a: A) {
+    private def |>[B](f: A => B): B = f(a)
   }
 }

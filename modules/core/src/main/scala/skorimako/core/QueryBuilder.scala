@@ -9,11 +9,7 @@ object QueryBuilder {
   private val ts = ident(Columns.Timestamp)
 
   /** 区切りの長さ（マイクロ秒）。範囲をおよそ target 個に分ける、きりのよい長さ。 */
-  def interval(
-    start: Long,
-    end: Long,
-    target: Int = 60
-  ): Long = {
+  def interval(start: Long, end: Long, target: Int = 60): Long = {
     val steps = List(
       1L, 5L, 10L, 15L, 30L, 60L, 120L, 300L, 600L, 900L, 1800L, 3600L, 7200L, 10800L, 21600L, 43200L, 86400L, 604800L
     )
@@ -23,11 +19,9 @@ object QueryBuilder {
   }
 
   /** 条件（利用者の WHERE と、キーワードの部分一致）。textColumns はキーワードを探す文字列の列。 */
-  def conditions(
-    where: Option[String],
-    keyword: Option[String],
-    textColumns: List[String]
-  ): Either[String, List[String]] =
+  def conditions(where: Option[String],
+                 keyword: Option[String],
+                 textColumns: List[String]): Either[String, List[String]] =
     for w <- where.map(_.trim).filter(_.nonEmpty) match {
         case None => Right(None)
         case Some(x) => SqlText.checkCondition(x).map(Some(_))
@@ -41,24 +35,12 @@ object QueryBuilder {
       w.map(x => s"($x)").toList ++ kw.toList
     }
 
-  private def whereClause(
-    cs: List[String]
-  ): String = if cs.isEmpty then "" else cs.mkString(" WHERE ", " AND ", "")
+  private def whereClause(cs: List[String]): String = if cs.isEmpty then "" else cs.mkString(" WHERE ", " AND ", "")
 
   /** ログの検索: 一覧・件数・時間ごとの件数の SQL。 */
-  final case class LogSql(
-    list: String,
-    count: String,
-    histogram: String)
+  final case class LogSql(list: String, count: String, histogram: String)
 
-  def logSearch(
-    stream: String,
-    conds: List[String],
-    order: String,
-    limit: Int,
-    offset: Int,
-    bucket: Long
-  ): LogSql = {
+  def logSearch(stream: String, conds: List[String], order: String, limit: Int, offset: Int, bucket: Long): LogSql = {
     val from = ident(stream)
     val w = whereClause(conds)
     val dir = if order.equalsIgnoreCase("asc") then "ASC" else "DESC"
@@ -70,10 +52,7 @@ object QueryBuilder {
   }
 
   /** 集計の式（value の列について）。 */
-  private def aggExpr(
-    agg: String,
-    col: String
-  ): Either[String, String] = {
+  private def aggExpr(agg: String, col: String): Either[String, String] = {
     val c = ident(col)
     agg match {
       case "avg" => Right(s"avg($c)")
@@ -91,14 +70,12 @@ object QueryBuilder {
    * メトリクスの時系列。labels は value・__name__ などを除いたラベルの列（rate で系列を分けるため）。
    * 結果の列: t（区切りの始まり）、groupBy の列、v。
    */
-  def metric(
-    stream: String,
-    agg: String,
-    groupBy: List[String],
-    conds: List[String],
-    step: Long,
-    labels: List[String]
-  ): Either[String, String] = {
+  def metric(stream: String,
+             agg: String,
+             groupBy: List[String],
+             conds: List[String],
+             step: Long,
+             labels: List[String]): Either[String, String] = {
     val from = ident(stream)
     val w = whereClause(conds)
     val gs = groupBy.map(ident)
@@ -116,13 +93,11 @@ object QueryBuilder {
   }
 
   /** アラート（閾値）の SQL。結果の列: grp（groupBy があるとき）、value。 */
-  def alert(
-    stream: String,
-    agg: String,
-    field: Option[String],
-    groupBy: Option[String],
-    conds: List[String]
-  ): Either[String, String] = {
+  def alert(stream: String,
+            agg: String,
+            field: Option[String],
+            groupBy: Option[String],
+            conds: List[String]): Either[String, String] = {
     val col = field.map(_.trim).filter(_.nonEmpty)
     for {
       e <- if agg == "count" then Right("count(*)")
@@ -139,11 +114,7 @@ object QueryBuilder {
   }
 
   /** 途絶のアラートの SQL。結果の列: grp（groupBy があるとき）、last（最後の行の時刻）。 */
-  def absence(
-    stream: String,
-    groupBy: Option[String],
-    conds: List[String]
-  ): String = {
+  def absence(stream: String, groupBy: Option[String], conds: List[String]): String = {
     val from = ident(stream)
     val w = whereClause(conds)
     groupBy.map(_.trim).filter(_.nonEmpty) match {
@@ -153,11 +124,7 @@ object QueryBuilder {
   }
 
   /** ダッシュボードの SQL の $__interval を区切りの長さ（マイクロ秒）に置き換える。 */
-  def expand(
-    sql: String,
-    start: Long,
-    end: Long
-  ): String =
+  def expand(sql: String, start: Long, end: Long): String =
     sql.replace("$__interval", interval(start, end, 120).toString)
 
   /**
@@ -165,12 +132,10 @@ object QueryBuilder {
    * labels はメトリクスのラベルの列（rate で系列を分けるため）、numericCols は数値の列（条件の値を数として書くため）。
    * 折れ線・棒: t（区切りの始まり）、分ける列、v。数値: v。表: 分ける列、v（大きい順）。
    */
-  def panel(
-    spec: PanelSpec,
-    kind: String,
-    labels: List[String],
-    numericCols: Set[String]
-  ): Either[String, (String, String)] = {
+  def panel(spec: PanelSpec,
+            kind: String,
+            labels: List[String],
+            numericCols: Set[String]): Either[String, (String, String)] = {
     val stream = spec.stream.trim
     if stream.isEmpty then Left("ストリーム（メトリクス）を選んでください")
     else {
@@ -217,10 +182,7 @@ object QueryBuilder {
     }
   }
 
-  private def filterSql(
-    f: PanelFilter,
-    numericCols: Set[String]
-  ): String = {
+  private def filterSql(f: PanelFilter, numericCols: Set[String]): String = {
     val c = ident(f.field.trim)
     val v = f.value.trim
     val num = numericCols.contains(f.field.trim) && v.toDoubleOption.isDefined

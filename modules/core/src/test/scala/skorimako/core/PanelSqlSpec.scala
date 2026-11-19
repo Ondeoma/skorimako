@@ -5,15 +5,13 @@ import skorimako.shared.*
 /** かんたん作成のパネルの SQL. */
 class PanelSqlSpec extends munit.FunSuite {
 
-  private def spec(
-    st: String,
-    stream: String,
-    measure: String,
-    field: Option[String] = None,
-    group: Option[String] = None,
-    filters: List[PanelFilter] = Nil,
-    service: Option[String] = None
-  ) =
+  private def spec(st: String,
+                   stream: String,
+                   measure: String,
+                   field: Option[String] = None,
+                   group: Option[String] = None,
+                   filters: List[PanelFilter] = Nil,
+                   service: Option[String] = None) =
     PanelSpec(st, stream, measure, field, group, filters, service, Some(5))
 
   test("ログの件数の折れ線（区切りは $__interval のまま）") {

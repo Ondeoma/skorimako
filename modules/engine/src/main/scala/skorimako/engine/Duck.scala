@@ -11,20 +11,14 @@ import java.sql.{Connection, DriverManager, ResultSet}
 import java.util.Properties
 
 /** DuckDB の設定（検索ごとのメモリ・スレッド・一時ファイル）。 */
-final case class DuckConfig(
-  memoryLimit: String = "1GB",
-  threads: Int = 4,
-  tempDir: Path)
+final case class DuckConfig(memoryLimit: String = "1GB", threads: Int = 4, tempDir: Path)
 
 /** DuckDB（組み込み）の使い方をまとめる。接続はメモリ上の DB で、使うたびに作って捨てる。 */
 object Duck {
 
   Class.forName("org.duckdb.DuckDBDriver")
 
-  def open(
-    cfg: DuckConfig,
-    stream: Boolean = false
-  ): Connection = {
+  def open(cfg: DuckConfig, stream: Boolean = false): Connection = {
     val p = new Properties()
     // 結果を少しずつ受け取る（上限の行数で読むのをやめたとき、残りを作らない）
     if stream then p.setProperty("jdbc_stream_results", "true")
@@ -41,18 +35,12 @@ object Duck {
     c
   }
 
-  def using[A](
-    c: Connection
-  )(
-    f: Connection => A
-  ): A =
+  def using[A](c: Connection)(f: Connection => A): A =
     try f(c)
     finally c.close()
 
   /** パスの一覧を DuckDB のリストの書き方にする。 */
-  def pathList(
-    ps: Seq[Path]
-  ): String = ps.map(p => lit(p.toString)).mkString("[", ", ", "]")
+  def pathList(ps: Seq[Path]): String = ps.map(p => lit(p.toString)).mkString("[", ", ", "]")
 
   // ---------------------------------------------------------------- 書き出し
 
@@ -60,40 +48,21 @@ object Duck {
    * 行を Parquet に書く。types は列ごとの型（値はこの型に直す。直せない値は null）。
    * いったん NDJSON に書き、DuckDB の read_json で型を決めて読み、時刻の順に並べて書き出す。
    */
-  def writeParquet(
-    cfg: DuckConfig,
-    rows: Seq[Row],
-    types: Map[String, String],
-    out: Path
-  ): Unit = {
+  def writeParquet(cfg: DuckConfig, rows: Seq[Row], types: Map[String, String], out: Path): Unit = {
     Files.createDirectories(cfg.tempDir)
     val tmp = Files.createTempFile(cfg.tempDir, "rows-", ".ndjson")
     try {
       val w = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8)
       try rows.foreach { r =>
-          val fs = r.fields.iterator.flatMap(
-            (
-              k,
-              v
-            ) => types.get(k).flatMap(v.coerce).map(x => k -> x.toJson)
-          ).toList
+          val fs = r.fields.iterator.flatMap((k, v) => types.get(k).flatMap(v.coerce).map(x => k -> x.toJson)).toList
           w.write(Json.fromFields((Columns.Timestamp -> Json.fromLong(r.ts)) :: fs).noSpaces)
           w.write('\n')
         }
       finally w.close()
       val cols =
-        ((Columns.Timestamp -> "BIGINT") :: types.toList.filter(_._1 != Columns.Timestamp).sortBy(_._1).map(
-          (
-            k,
-            t
-          ) => k -> FieldTypes.sqlType(t)
-        ))
-          .map(
-            (
-              k,
-              t
-            ) => s"${lit(k)}: ${lit(t)}"
-          ).mkString("{", ", ", "}")
+        ((Columns.Timestamp -> "BIGINT") ::
+          types.toList.filter(_._1 != Columns.Timestamp).sortBy(_._1).map((k, t) => k -> FieldTypes.sqlType(t)))
+          .map((k, t) => s"${lit(k)}: ${lit(t)}").mkString("{", ", ", "}")
       using(open(cfg)) { c =>
         val s = c.createStatement()
         try s.execute(
@@ -108,11 +77,7 @@ object Duck {
   }
 
   /** いくつかの Parquet を1つにまとめる（圧縮）。(行数, 最小の時刻, 最大の時刻)。 */
-  def mergeParquet(
-    cfg: DuckConfig,
-    files: Seq[Path],
-    out: Path
-  ): (Long, Long, Long) =
+  def mergeParquet(cfg: DuckConfig, files: Seq[Path], out: Path): (Long, Long, Long) =
     using(open(cfg)) { c =>
       val s = c.createStatement()
       try {
@@ -131,10 +96,7 @@ object Duck {
   // ---------------------------------------------------------------- 検索
 
   /** 結果の値を JSON に。 */
-  def cell(
-    rs: ResultSet,
-    i: Int
-  ): Json =
+  def cell(rs: ResultSet, i: Int): Json =
     rs.getObject(i) match {
       case null => Json.Null
       case v: java.lang.Long => Json.fromLong(v)

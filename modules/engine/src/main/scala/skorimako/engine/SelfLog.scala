@@ -7,27 +7,15 @@ import java.util.concurrent.ConcurrentLinkedQueue
  * 取り込みが止まっていても溢れないよう、たまるのは1万件まで。
  */
 object SelfLog {
-  final case class Entry(
-    ts: Long,
-    level: String,
-    message: String)
+  final case class Entry(ts: Long, level: String, message: String)
   private val logger = org.slf4j.LoggerFactory.getLogger("skorimako")
   private val q = new ConcurrentLinkedQueue[Entry]()
 
-  def warn(
-    msg: String
-  ): Unit = add("WARN", msg)
-  def error(
-    msg: String
-  ): Unit = add("ERROR", msg)
-  def info(
-    msg: String
-  ): Unit = add("INFO", msg)
+  def warn(msg: String): Unit = add("WARN", msg)
+  def error(msg: String): Unit = add("ERROR", msg)
+  def info(msg: String): Unit = add("INFO", msg)
 
-  private def add(
-    level: String,
-    msg: String
-  ): Unit = {
+  private def add(level: String, msg: String): Unit = {
     val log = logger
     level match {
       case "ERROR" => log.error(msg)

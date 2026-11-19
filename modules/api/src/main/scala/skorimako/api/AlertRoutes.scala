@@ -14,13 +14,12 @@ import skorimako.shared.*
 import java.util.UUID
 
 /** アラートのルール・履歴・通知先。 */
-final class AlertRoutes(
-  store: AlertStore,
-  svc: AlertService,
-  users: UserStore,
-  box: SecretBox,
-  val sessions: SessionAuth,
-  acl: Acl) extends RouteSupport {
+final class AlertRoutes(store: AlertStore,
+                        svc: AlertService,
+                        users: UserStore,
+                        box: SecretBox,
+                        val sessions: SessionAuth,
+                        acl: Acl) extends RouteSupport {
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
     case req @ GET -> Root / "api" / "alerts" => getAlerts(req)
@@ -43,21 +42,15 @@ final class AlertRoutes(
     case req @ GET -> Root / "api" / "deliveries" => getDeliveries(req)
   }
 
-  private def getAlerts(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getAlerts(req: Request[IO]): IO[Response[IO]] =
     authed(req)(_ => store.rules.flatMap(rs => Ok(rs.map(_.toDto))))
 
-  private def getAlertsEvents(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getAlertsEvents(req: Request[IO]): IO[Response[IO]] =
     authed(req)(_ =>
       store.events(param(req, "ruleId").flatMap(uuidOpt), intParam(req, "limit", 100, 1000)).flatMap(Ok(_))
     )
 
-  private def postAlertsTest(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postAlertsTest(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       body[AlertRuleReq](req)(r =>
         svc.validate(r) match {
@@ -70,9 +63,7 @@ final class AlertRoutes(
       )
     )
 
-  private def postAlerts(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postAlerts(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       body[AlertRuleReq](req)(r =>
         svc.validate(r) match {
@@ -88,10 +79,7 @@ final class AlertRoutes(
       )
     )
 
-  private def postAlertAck(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def postAlertAck(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(s =>
       body[AckReq](req)(r =>
         store.ack(id, s.user.id, s.user.name, r.note.trim.take(500)).flatMap {
@@ -102,20 +90,13 @@ final class AlertRoutes(
       )
     )
 
-  private def deleteAlertAck(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def deleteAlertAck(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(s => store.unack(id) *> audit(users, s, "alert.unack", Some(id.toString)) *> NoContent())
 
-  private def getSilences(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getSilences(req: Request[IO]): IO[Response[IO]] =
     authed(req)(_ => store.silences(param(req, "all").contains("true")).flatMap(Ok(_)))
 
-  private def postSilences(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postSilences(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       body[SilenceReq](req) { r =>
         val now = java.time.Instant.now()
@@ -133,10 +114,7 @@ final class AlertRoutes(
       }
     )
 
-  private def deleteSilence(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def deleteSilence(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(s =>
       store.endSilence(id).flatMap {
         case true => audit(users, s, "silence.end", Some(id.toString)) *> NoContent()
@@ -144,16 +122,10 @@ final class AlertRoutes(
       }
     )
 
-  private def getAlert(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def getAlert(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(_ => store.rule(id).flatMap(_.fold(err(ErrorCode.RuleNotFound))(r => Ok(r.toDto))))
 
-  private def putAlert(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def putAlert(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(s =>
       body[AlertRuleReq](req)(r =>
         svc.validate(r) match {
@@ -170,10 +142,7 @@ final class AlertRoutes(
       )
     )
 
-  private def deleteAlert(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def deleteAlert(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(s =>
       store.delete(id).flatMap {
         case false => err(ErrorCode.RuleNotFound)
@@ -181,14 +150,10 @@ final class AlertRoutes(
       }
     )
 
-  private def getDestinations(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getDestinations(req: Request[IO]): IO[Response[IO]] =
     authed(req)(_ => store.destinations.flatMap(Ok(_)))
 
-  private def postDestinations(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postDestinations(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       body[DestinationReq](req)(r =>
         destOk(r) match {
@@ -204,10 +169,7 @@ final class AlertRoutes(
       )
     )
 
-  private def putDestination(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def putDestination(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(s =>
       body[DestinationReq](req)(r =>
         destOk(r) match {
@@ -225,10 +187,7 @@ final class AlertRoutes(
       )
     )
 
-  private def deleteDestination(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def deleteDestination(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(s =>
       store.destination(id).flatMap {
         case None => err(ErrorCode.ChannelNotFound)
@@ -238,10 +197,7 @@ final class AlertRoutes(
       }
     )
 
-  private def postDestinationTest(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def postDestinationTest(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(s =>
       store.destination(id).map(_.filter(d => canManage(s, d.kind, d.targetUser.map(_.id)))).flatMap {
         case None => err(ErrorCode.ChannelTestAdminOnly)
@@ -252,29 +208,18 @@ final class AlertRoutes(
       }
     )
 
-  private def getDeliveries(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getDeliveries(req: Request[IO]): IO[Response[IO]] =
     admin(req)(_ => store.deliveries(intParam(req, "limit", 100, 1000)).flatMap(Ok(_)))
 
   /** ルールの対象のストリームを見られるか（SQL のルールは評価のときに確かめる）。 */
-  private def canSee(
-    s: AuthSession,
-    r: AlertRuleReq
-  ): IO[Boolean] =
+  private def canSee(s: AuthSession, r: AlertRuleReq): IO[Boolean] =
     if r.mode == AlertMode.Sql then IO.pure(true) else acl.visible(s.viewer, r.streamType, r.stream)
 
   /** 通知先を扱えるか: 管理者、または自分宛ての stui の DM。 */
-  private def canManage(
-    s: AuthSession,
-    kind: String,
-    target: Option[java.util.UUID]
-  ): Boolean =
+  private def canManage(s: AuthSession, kind: String, target: Option[java.util.UUID]): Boolean =
     s.canAdmin || (kind == DestinationKind.StuiDm && target.contains(s.user.id) && s.canWrite)
 
-  private def destOk(
-    r: DestinationReq
-  ): Either[String, DestinationReq] = {
+  private def destOk(r: DestinationReq): Either[String, DestinationReq] = {
     val dm = r.kind == DestinationKind.StuiDm
     for {
       _ <- Either.cond(r.name.trim.nonEmpty, (), "名前を入力してください")

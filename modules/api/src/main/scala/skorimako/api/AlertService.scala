@@ -25,22 +25,19 @@ import scala.concurrent.duration.*
  * 評価: 時刻が来たルールを全ノードが取り合い（次の評価の時刻を先に進めるので二重にしない）、直近 period の範囲で SQL を実行する。
  * 通知: 状態が変わったとき（発生・解消）と、発生中に沈黙の時間が過ぎたときに、通知先へ送る（送信待ちの表から再試行つきで）。
  */
-final class AlertService(
-  store: AlertStore,
-  engine: QueryEngine,
-  http: Client[IO],
-  box: SecretBox,
-  cfg: ApiConfig,
-  stui: StuiClient,
-  stats: Stats,
-  push: PushService) {
+final class AlertService(store: AlertStore,
+                         engine: QueryEngine,
+                         http: Client[IO],
+                         box: SecretBox,
+                         cfg: ApiConfig,
+                         stui: StuiClient,
+                         stats: Stats,
+                         push: PushService) {
 
   // ---------------------------------------------------------------- 検査・評価
 
   /** ルールの内容を確かめ、正しい形にする。 */
-  def validate(
-    r: AlertRuleReq
-  ): Either[String, AlertRuleReq] = {
+  def validate(r: AlertRuleReq): Either[String, AlertRuleReq] = {
     val name = r.name.trim
     for {
       _ <- Either.cond(name.nonEmpty && name.length <= 200, (), "名前を入力してください（200文字まで）")
@@ -80,22 +77,18 @@ final class AlertService(
   }
 
   /** 評価する（通知はしない）。values はすべての値、hits は条件に当てはまったもの。 */
-  def evaluate(
-    r: AlertRuleReq,
-    now: Instant,
-    viewer: Viewer = Viewer.system
-  ): IO[Either[String, (String, List[AlertHitDto], List[AlertHitDto])]] =
+  def evaluate(r: AlertRuleReq,
+               now: Instant,
+               viewer: Viewer = Viewer.system): IO[Either[String, (String, List[AlertHitDto], List[AlertHitDto])]] =
     if r.mode == AlertMode.Absence then absence(r, now, viewer) else evaluateQuery(r, now, viewer)
 
   /**
    * 途絶: lookback の範囲で来ていたデータ（groupBy の値ごと）の、最後の行からの分。直近 period の間に来ていなければ当てはまる。
    * groupBy がなければ、ストリーム全体で直近 period の間に1行もなければ当てはまる。
    */
-  private def absence(
-    r: AlertRuleReq,
-    now: Instant,
-    viewer: Viewer
-  ): IO[Either[String, (String, List[AlertHitDto], List[AlertHitDto])]] = {
+  private def absence(r: AlertRuleReq,
+                      now: Instant,
+                      viewer: Viewer): IO[Either[String, (String, List[AlertHitDto], List[AlertHitDto])]] = {
     val end = now.getEpochSecond * 1000000L + now.getNano / 1000
     val look = r.lookbackMinutes.getOrElse(1440).toLong
     val start = end - look * 60L * 1000000L
@@ -109,11 +102,7 @@ final class AlertService(
               sql,
               10000
             )).map(_.map {
-              (
-                res,
-                _,
-                _
-              ) =>
+              (res, _, _) =>
                 val names = res.columns.map(_.name)
                 val values = res.rows.map { row =>
                   val m = names.zip(row).toMap
@@ -128,21 +117,14 @@ final class AlertService(
     }
   }
 
-  private def evaluateQuery(
-    r: AlertRuleReq,
-    now: Instant,
-    viewer: Viewer
-  ): IO[Either[String, (String, List[AlertHitDto], List[AlertHitDto])]] = {
+  private def evaluateQuery(r: AlertRuleReq,
+                            now: Instant,
+                            viewer: Viewer): IO[Either[String, (String, List[AlertHitDto], List[AlertHitDto])]] = {
     val end = now.getEpochSecond * 1000000L + now.getNano / 1000
     val start = end - r.periodMinutes.toLong * 60L * 1000000L
     val built: Either[String, (String, List[String])] =
       if r.mode == AlertMode.Sql then
-        SqlText.checkQuery(r.sql.getOrElse("")).map(
-          (
-            sql,
-            names
-          ) => (sql, names.toList)
-        )
+        SqlText.checkQuery(r.sql.getOrElse("")).map((sql, names) => (sql, names.toList))
       else
         QueryBuilder.conditions(r.where, None, Nil).flatMap(cs =>
           QueryBuilder.alert(r.stream, r.agg, r.field, r.groupBy, cs)
@@ -161,11 +143,7 @@ final class AlertService(
               end,
               if r.mode == AlertMode.Sql then Map.empty else Prune.constraints(r.where)
             )(_.query(QueryBuilder.expand(sql, start, end), 1000)).map(_.map {
-              (
-                res,
-                _,
-                _
-              ) =>
+              (res, _, _) =>
                 val values = AlertService.values(res)
                 (sql, values.filter(v => AlertLogic.compare(r.op, v.value, r.threshold)), values)
             })
@@ -218,24 +196,13 @@ final class AlertService(
                 event
               )
             ) <*
-              event.filter(_ => !rule.silenced).traverse_(
-                (
-                  st,
-                  _,
-                  _,
-                  msg
-                ) => pushEvent(rule, st, msg).start
-              )
+              event.filter(_ => !rule.silenced).traverse_((st, _, _, msg) => pushEvent(rule, st, msg).start)
         }
       }
     }.map(_.size))
 
   /** 発生・解消を、ルールを作った人と通知先（stui の DM）の人の端末にプッシュ通知で送る（ミュート中は送らない）。 */
-  private def pushEvent(
-    rule: RuleRow,
-    state: String,
-    message: String
-  ): IO[Unit] = {
+  private def pushEvent(rule: RuleRow, state: String, message: String): IO[Unit] = {
     val (icon, label) = AlertService.label(state)
     val m = PushMessage(
       s"$icon [$label] ${rule.name}",
@@ -253,9 +220,7 @@ final class AlertService(
   // ---------------------------------------------------------------- 通知
 
   /** 通知先が内部のネットワークでないか（WEBHOOK_DENY_PRIVATE=true のときだけ確かめる。stui は社内に置くことが多いため既定では許す）。 */
-  def allowedHost(
-    url: String
-  ): IO[Boolean] =
+  def allowedHost(url: String): IO[Boolean] =
     if !cfg.webhookDenyPrivate then IO.pure(true)
     else
       Uri.fromString(url).toOption.flatMap(_.host).map(_.value.stripPrefix("[").stripSuffix("]")) match {
@@ -270,14 +235,10 @@ final class AlertService(
           }).handleError(_ => false)
       }
 
-  private def ruleUrl(
-    id: UUID
-  ): String = s"${cfg.publicUrl}/alerts/$id"
+  private def ruleUrl(id: UUID): String = s"${cfg.publicUrl}/alerts/$id"
 
   /** 通知の本文。stui は Markdown、Slack は mrkdwn、webhook は JSON。 */
-  def payload(
-    d: DeliveryRow
-  ): Json = {
+  def payload(d: DeliveryRow): Json = {
     val hits = d.hits.as[List[AlertHitDto]].getOrElse(Nil)
     val (icon, label) = AlertService.label(d.eventState)
     val detail =
@@ -321,9 +282,7 @@ final class AlertService(
     }
   }
 
-  def send(
-    d: DeliveryRow
-  ): IO[OutboxResult] =
+  def send(d: DeliveryRow): IO[OutboxResult] =
     sendRaw(d).flatTap { r =>
       val result = r match {
         case OutboxResult.Sent => "sent"
@@ -333,9 +292,7 @@ final class AlertService(
       IO(stats.inc("skorimako_alert_notifications_total", Map("result" -> result)))
     }
 
-  private def sendRaw(
-    d: DeliveryRow
-  ): IO[OutboxResult] =
+  private def sendRaw(d: DeliveryRow): IO[OutboxResult] =
     if d.kind == DestinationKind.StuiDm then
       d.targetUserId match {
         case None => IO.pure(OutboxResult.Skip("宛先の人がいません"))
@@ -373,9 +330,7 @@ final class AlertService(
       }
 
   /** 通知先を試す（その場で送り、結果を返す）。 */
-  def test(
-    dest: UUID
-  ): IO[Either[String, String]] =
+  def test(dest: UUID): IO[Either[String, String]] =
     store.destination(dest).flatMap {
       case None => IO.pure(Left("通知先が見つかりません"))
       case Some(_) =>
@@ -416,9 +371,7 @@ final class AlertService(
 object AlertService {
 
   /** 出来事（発生・解消など）の印と名前。 */
-  def label(
-    state: String
-  ): (String, String) = state match {
+  def label(state: String): (String, String) = state match {
     case "firing" => ("🔴", "発生")
     case "resolved" => ("✅", "解消")
     case "test" => ("🧪", "通知の試験")
@@ -427,21 +380,14 @@ object AlertService {
   }
 
   /** 発生のときの文言。途絶は「最後のデータから◯分」。 */
-  def describe(
-    mode: String,
-    hits: List[AlertHitDto],
-    op: String,
-    threshold: Double
-  ): String =
+  def describe(mode: String, hits: List[AlertHitDto], op: String, threshold: Double): String =
     if mode == AlertMode.Absence then {
       val parts = hits.take(10).map(h => h.group.fold("")(g => s"$g: ") + s"${AlertLogic.fmt(h.value)}分")
       s"データが来ていません（最後のデータから ${parts.mkString("、")}${if hits.size > 10 then s" ほか${hits.size - 10}件" else ""}）"
     } else AlertLogic.describe(hits, op, threshold)
 
   /** 結果の各行の値: value の列（なければ最初の数値の列）。grp の列（なければ数値でない最初の列）を分け方にする。 */
-  def values(
-    res: QueryResultDto
-  ): List[AlertHitDto] = {
+  def values(res: QueryResultDto): List[AlertHitDto] = {
     val names = res.columns.map(_.name.toLowerCase)
     res.rows.flatMap { row =>
       val cells = names.zip(row)

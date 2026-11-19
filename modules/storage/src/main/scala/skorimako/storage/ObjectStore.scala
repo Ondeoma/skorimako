@@ -16,17 +16,9 @@ final case class S3Config(
 
 /** 観測データのファイル（Parquet）の置き場所。 */
 trait ObjectStore {
-  def put(
-    key: String,
-    file: Path
-  ): IO[Unit]
+  def put(key: String, file: Path): IO[Unit]
 
   /** dest に保存する（途中で失敗しても dest に半端なファイルを残さない）。なければ false。 */
-  def download(
-    key: String,
-    dest: Path
-  ): IO[Boolean]
-  def delete(
-    key: String
-  ): IO[Unit]
+  def download(key: String, dest: Path): IO[Boolean]
+  def delete(key: String): IO[Unit]
 }

@@ -5,9 +5,7 @@ import org.scalajs.dom
 import scala.scalajs.js
 
 /** 描いたグラフ. 幅の変化（ResizeObserver）とダークモードの切り替え（色を取り直す）に追従する. */
-final class ChartHandle private[web] (
-  el: dom.HTMLElement,
-  initial: ChartSpec) {
+final class ChartHandle private[web] (el: dom.HTMLElement, initial: ChartSpec) {
 
   private var plot: js.Dynamic = null
   private var current = initial
@@ -37,9 +35,7 @@ final class ChartHandle private[web] (
   private val onTheme: js.Function1[js.Any, Unit] = _ => draw()
   mq.addEventListener("change", onTheme)
 
-  def update(
-    s: ChartSpec
-  ): Unit = { current = s; draw() }
+  def update(s: ChartSpec): Unit = { current = s; draw() }
 
   def destroy(): Unit = {
     ro.disconnect()

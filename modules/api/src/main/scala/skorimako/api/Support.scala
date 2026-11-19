@@ -27,26 +27,22 @@ final case class ApiConfig(
   grpcPort: Int = 0)
 
 /** 連携する stui（skorimako をクライアントとして登録しておく）。url は画面から開く URL、internalUrl はサーバーから呼ぶ URL。 */
-final case class LinkService(
-  provider: String,
-  url: String,
-  clientId: String,
-  clientSecret: String,
-  internalUrl: Option[String] = None) {
+final case class LinkService(provider: String,
+                             url: String,
+                             clientId: String,
+                             clientSecret: String,
+                             internalUrl: Option[String] = None) {
   def apiUrl: String = internalUrl.getOrElse(url)
 }
 
 /** 認可を求める外部のサービス（OAUTH_CLIENTS で登録する。stui がリンクの要約を読むため）。redirectUri は完全一致で照合する。 */
-final case class OAuthClient(
-  id: String,
-  secret: String,
-  redirectUri: String,
-  name: String,
-  scopes: List[String] = List("read"))
+final case class OAuthClient(id: String,
+                             secret: String,
+                             redirectUri: String,
+                             name: String,
+                             scopes: List[String] = List("read"))
 
-extension (
-  s: AuthSession
-) {
+extension (s: AuthSession) {
 
   /** 検索の権限（管理者・グループ）。 */
   def viewer: skorimako.engine.Viewer = skorimako.engine.Viewer(s.isAdmin, s.groups.map(_.name).toSet)

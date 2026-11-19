@@ -18,41 +18,24 @@ import java.net.http.{HttpClient, HttpRequest, HttpResponse}
  */
 object SendSmoke {
 
-  private def kv(
-    k: String,
-    v: String
-  ) = KeyValue.newBuilder().setKey(k).setValue(AnyValue.newBuilder().setStringValue(v)).build()
+  private def kv(k: String, v: String) =
+    KeyValue.newBuilder().setKey(k).setValue(AnyValue.newBuilder().setStringValue(v)).build()
 
   /** WriteRequest（labels・samples だけ）を組み立てる。 */
-  private def writeRequest(
-    series: List[(Map[String, String], List[(Double, Long)])]
-  ): Array[Byte] = {
-    def msg(
-      f: CodedOutputStream => Unit
-    ): Array[Byte] = {
+  private def writeRequest(series: List[(Map[String, String], List[(Double, Long)])]): Array[Byte] = {
+    def msg(f: CodedOutputStream => Unit): Array[Byte] = {
       val bo = new ByteArrayOutputStream(); val o = CodedOutputStream.newInstance(bo); f(o); o.flush(); bo.toByteArray
     }
     msg { o =>
       series.foreach {
-        (
-          labels,
-          samples
-        ) =>
+        (labels, samples) =>
           o.writeByteArray(
             1,
             msg { ts =>
-              labels.toList.sorted.foreach(
-                (
-                  k,
-                  v
-                ) => ts.writeByteArray(1, msg { l => l.writeString(1, k); l.writeString(2, v) })
+              labels.toList.sorted.foreach((k, v) =>
+                ts.writeByteArray(1, msg { l => l.writeString(1, k); l.writeString(2, v) })
               )
-              samples.foreach(
-                (
-                  v,
-                  t
-                ) => ts.writeByteArray(2, msg { s => s.writeDouble(1, v); s.writeInt64(2, t) })
-              )
+              samples.foreach((v, t) => ts.writeByteArray(2, msg { s => s.writeDouble(1, v); s.writeInt64(2, t) }))
             }
           )
       }
@@ -64,9 +47,7 @@ object SendSmoke {
     }
   }
 
-  def main(
-    args: Array[String]
-  ): Unit = {
+  def main(args: Array[String]): Unit = {
     val key = args(0)
     val port = args.lift(1).map(_.toInt).getOrElse(4319)
     val base = args.lift(2).getOrElse("http://localhost:8101")
@@ -96,12 +77,7 @@ object SendSmoke {
     val pts = (0 until 20).map(i => ((i * 15).toDouble + 100, now - (19 - i) * 15000L)).toList
     val body = writeRequest(List(
       Map("__name__" -> "demo_jobs_total", "job" -> "worker", "instance" -> "a") -> pts,
-      Map("__name__" -> "demo_jobs_total", "job" -> "worker", "instance" -> "b") -> pts.map(
-        (
-          v,
-          t
-        ) => (v * 2, t)
-      )
+      Map("__name__" -> "demo_jobs_total", "job" -> "worker", "instance" -> "b") -> pts.map((v, t) => (v * 2, t))
     ))
     val comp = new io.airlift.compress.snappy.SnappyCompressor()
     val out = new Array[Byte](comp.maxCompressedLength(body.length))

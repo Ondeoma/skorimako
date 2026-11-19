@@ -28,23 +28,19 @@ final case class IngestConfig(
 )
 
 /** 1回の書き出しの結果。 */
-final case class FlushStats(
-  files: Int,
-  rows: Long,
-  failed: Int)
+final case class FlushStats(files: Int, rows: Long, failed: Int)
 
 /**
  * 取り込み: 受けた行をストリームごとにメモリにため、同時にローカルの WAL（追記のファイル）にも書く。
  * flushInterval ごとに Parquet にして S3 に置き、PostgreSQL に登録してから WAL を消す。
  * 起動時に WAL が残っていれば（前回の異常終了）、読み直して書き出す。
  */
-final class Ingester private (
-  cfg: IngestConfig,
-  duck: DuckConfig,
-  store: StreamStore,
-  objects: ObjectStore,
-  mutex: Mutex[IO],
-  stats: Stats) {
+final class Ingester private (cfg: IngestConfig,
+                              duck: DuckConfig,
+                              store: StreamStore,
+                              objects: ObjectStore,
+                              mutex: Mutex[IO],
+                              stats: Stats) {
 
   private type Key = (String, String) // (種類, ストリーム名)
 
@@ -67,12 +63,7 @@ final class Ingester private (
     writer = new BufferedWriter(new OutputStreamWriter(out, StandardCharsets.UTF_8), 1 << 16)
   }
 
-  private def walWrite(
-    streamType: String,
-    stream: String,
-    rows: Iterable[Row],
-    meta: Option[MetricMeta]
-  ): Unit = {
+  private def walWrite(streamType: String, stream: String, rows: Iterable[Row], meta: Option[MetricMeta]): Unit = {
     val j = Json.obj(
       "t" -> Json.fromString(streamType),
       "s" -> Json.fromString(stream),
@@ -94,11 +85,7 @@ final class Ingester private (
     if cfg.walSync then channel.force(false)
   }
 
-  private def addLocal(
-    streamType: String,
-    stream: String,
-    rows: Iterable[Row]
-  ): Unit = {
+  private def addLocal(streamType: String, stream: String, rows: Iterable[Row]): Unit = {
     val b = buffers.getOrElseUpdate((streamType, stream), mutable.ArrayBuffer.empty)
     b ++= rows
     buffered += rows.size
@@ -107,40 +94,26 @@ final class Ingester private (
   /** 登録済みのストリーム（書き出す前でも名前で検索できるよう、初めて受けたときに登録する）。 */
   private val known = java.util.concurrent.ConcurrentHashMap.newKeySet[(String, String)]()
 
-  private def register(
-    streamType: String,
-    names: Iterable[String]
-  ): IO[Unit] =
+  private def register(streamType: String, names: Iterable[String]): IO[Unit] =
     names.toList.filterNot(n => known.contains((streamType, n))).traverse_(n =>
       store.ensure(streamType, n).flatMap(_ => IO(known.add((streamType, n)))).void
     )
 
   /** 受けた行を加える。たまりすぎていたら Left（503 で断る）。 */
-  def ingest(
-    streamType: String,
-    batch: Batch
-  ): IO[Either[String, Int]] =
+  def ingest(streamType: String, batch: Batch): IO[Either[String, Int]] =
     if batch.rows.isEmpty then IO.pure(Right(0))
     else
       register(streamType, batch.rows.keys) *> mutex.lock.surround(IO.blocking {
         if buffered + batch.size > cfg.maxBufferedRows then Left("取り込みが混み合っています。しばらくしてから送り直してください")
         else {
           batch.rows.foreach {
-            (
-              stream,
-              rows
-            ) =>
+            (stream, rows) =>
               if rows.nonEmpty then {
                 walWrite(streamType, stream, rows, batch.meta.get(stream))
                 addLocal(streamType, stream, rows)
               }
           }
-          batch.meta.foreach(
-            (
-              s,
-              m
-            ) => metas((streamType, s).toString) = m
-          )
+          batch.meta.foreach((s, m) => metas((streamType, s).toString) = m)
           walFlush()
           stats.inc("skorimako_ingested_rows_total", Map("type" -> streamType), batch.size)
           stats.set("skorimako_buffered_rows", Map.empty, buffered)
@@ -149,12 +122,7 @@ final class Ingester private (
       })
 
   /** 書き出す前の行（検索に出すため）。names のストリームの、時刻が範囲に入るもの。 */
-  def snapshot(
-    streamType: String,
-    names: Set[String],
-    start: Long,
-    end: Long
-  ): IO[Map[String, Vector[Row]]] =
+  def snapshot(streamType: String, names: Set[String], start: Long, end: Long): IO[Map[String, Vector[Row]]] =
     mutex.lock.surround(IO {
       buffers.collect {
         case ((t, n), rows) if t == streamType && names.contains(n) =>
@@ -163,12 +131,8 @@ final class Ingester private (
     })
 
   /** たまっている行の数（ストリームごと）。 */
-  def pending: IO[Map[String, Long]] = mutex.lock.surround(IO(buffers.map(
-    (
-      k,
-      v
-    ) => s"${k._1}/${k._2}" -> v.size.toLong
-  ).toMap))
+  def pending: IO[Map[String, Long]] =
+    mutex.lock.surround(IO(buffers.map((k, v) => s"${k._1}/${k._2}" -> v.size.toLong).toMap))
 
   /** 書き出す時期か。 */
   private def due: IO[Boolean] = mutex.lock.surround(IO {
@@ -193,12 +157,7 @@ final class Ingester private (
   private def flush0: IO[FlushStats] =
     for {
       taken <- mutex.lock.surround(IO.blocking {
-        val t = buffers.toList.map(
-          (
-            k,
-            v
-          ) => k -> v.toVector
-        )
+        val t = buffers.toList.map((k, v) => k -> v.toVector)
         val m = metas.toMap
         val old = segment
         buffers.clear(); metas.clear(); buffered = 0; since = System.nanoTime()
@@ -214,45 +173,24 @@ final class Ingester private (
         }
       }
       failed = results.collect { case Left(f) => f }
-      _ <- failed.traverse_(
-        (
-          t,
-          s,
-          _,
-          e
-        ) =>
-          IO(SelfLog.warn(
-            s"flush failed for $t/$s (${e.getClass.getSimpleName}: ${Option(e.getMessage).getOrElse("").take(200)}); will retry"
-          ))
+      _ <- failed.traverse_((t, s, _, e) =>
+        IO(SelfLog.warn(
+          s"flush failed for $t/$s (${e.getClass.getSimpleName}: ${Option(e.getMessage).getOrElse("").take(200)}); will retry"
+        ))
       )
       _ <- mutex.lock.surround(IO.blocking {
-        failed.foreach(
-          (
-            t,
-            s,
-            rows,
-            _
-          ) => { walWrite(t, s, rows, ms.get((t, s).toString)); addLocal(t, s, rows) }
-        )
+        failed.foreach((t, s, rows, _) => { walWrite(t, s, rows, ms.get((t, s).toString)); addLocal(t, s, rows) })
         if failed.nonEmpty then walFlush()
         Files.deleteIfExists(oldSeg)
       })
     } yield FlushStats(results.count(_.isRight), results.collect { case Right(n) => n }.sum, failed.size)
 
   /** 1つのストリームの行を Parquet にして S3 に置き、登録する。 */
-  private def writeOne(
-    streamType: String,
-    stream: String,
-    rows: Vector[Row],
-    meta: Option[MetricMeta]
-  ): IO[Long] =
+  private def writeOne(streamType: String, stream: String, rows: Vector[Row], meta: Option[MetricMeta]): IO[Long] =
     for {
       st <- store.ensure(streamType, stream)
       inferred = rows.foldLeft(Map.empty[String, String]) {
-        (
-          acc,
-          r
-        ) =>
+        (acc, r) =>
           r.fields.foldLeft(acc) { case (a, (k, v)) =>
             a.updated(k, a.get(k).fold(v.fieldType)(FieldTypes.widen(_, v.fieldType)))
           }
@@ -268,12 +206,7 @@ final class Ingester private (
         IO.blocking(Duck.writeParquet(duck, rows, types, out)) *> objects.put(key, out) *> IO.blocking(Files.size(out))
       }
       traces = if streamType == StreamType.Traces then Ingester.traceParts(rows) else Nil
-      tags = Prune.tags(rows).filter(
-        (
-          k,
-          _
-        ) => types.get(k).contains(FieldType.Utf8)
-      )
+      tags = Prune.tags(rows).filter((k, _) => types.get(k).contains(FieldType.Utf8))
       _ <- store.addFile(NewFile(st.id, key, minTs, maxTs, rows.size.toLong, size, 0, cfg.nodeId, tags), traces)
       _ = stats.inc("skorimako_stored_bytes_total", Map("type" -> streamType), size.toDouble)
     } yield rows.size.toLong
@@ -302,10 +235,7 @@ final class Ingester private (
           io.circe.parser.parse(line).toOption.foreach { j =>
             val c = j.hcursor
             (c.get[String]("t"), c.get[String]("s")).tupled.toOption.foreach {
-              (
-                t,
-                s
-              ) =>
+              (t, s) =>
                 val rows = c.get[Vector[Json]]("r").getOrElse(Vector.empty).flatMap(Row.fromJson)
                 addLocal(t, s, rows)
                 c.downField("m").focus.filterNot(_.isNull).foreach { m =>
@@ -323,12 +253,7 @@ final class Ingester private (
       }
       openSegment()
       // 読み込んだ分は新しい WAL に書き直し、古いものは消す
-      buffers.foreach(
-        (
-          k,
-          rows
-        ) => walWrite(k._1, k._2, rows, metas.get(k.toString))
-      )
+      buffers.foreach((k, rows) => walWrite(k._1, k._2, rows, metas.get(k.toString)))
       writer.flush()
       segs.foreach(Files.deleteIfExists)
       n
@@ -337,13 +262,11 @@ final class Ingester private (
 
 object Ingester {
 
-  def create(
-    cfg: IngestConfig,
-    duck: DuckConfig,
-    store: StreamStore,
-    objects: ObjectStore,
-    stats: Stats
-  ): IO[Ingester] =
+  def create(cfg: IngestConfig,
+             duck: DuckConfig,
+             store: StreamStore,
+             objects: ObjectStore,
+             stats: Stats): IO[Ingester] =
     for {
       m <- Mutex[IO]
       i = new Ingester(cfg, duck, store, objects, m, stats)
@@ -352,27 +275,16 @@ object Ingester {
     } yield i
 
   /** S3 のキー: {種類}/{ストリーム}/{年}/{月}/{日}/{時}/{ノード}-{乱数}.parquet（時刻は最も古い行の UTC）。 */
-  def objectKey(
-    streamType: String,
-    stream: String,
-    minTs: Long,
-    node: String,
-    prefix: String
-  ): String = {
+  def objectKey(streamType: String, stream: String, minTs: Long, node: String, prefix: String): String = {
     val t = Instant.ofEpochSecond(minTs / 1000000).atOffset(ZoneOffset.UTC)
     val n = node.replaceAll("[^A-Za-z0-9_-]", "_").take(40)
     f"$streamType/$stream/${t.getYear}%04d/${t.getMonthValue}%02d/${t.getDayOfMonth}%02d/${t.getHour}%02d/$prefix$n-${UUID.randomUUID()}.parquet"
   }
 
   /** スパンの行からトレースの索引に足す内容。 */
-  def traceParts(
-    rows: Seq[Row]
-  ): List[TracePart] =
+  def traceParts(rows: Seq[Row]): List[TracePart] =
     rows.groupBy(_.str("trace_id").getOrElse("")).toList.filter(_._1.nonEmpty).map {
-      (
-        id,
-        spans
-      ) =>
+      (id, spans) =>
         val root = spans.find(_.str("parent_span_id").forall(_.isEmpty))
         TracePart(
           id,

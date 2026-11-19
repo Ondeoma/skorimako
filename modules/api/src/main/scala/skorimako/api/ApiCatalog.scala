@@ -2,10 +2,7 @@ package skorimako.api
 
 /** REST API の一覧（MCP の list_api_endpoints と GET /api/endpoints）。 */
 object ApiCatalog {
-  final case class Endpoint(
-    method: String,
-    path: String,
-    description: String)
+  final case class Endpoint(method: String, path: String, description: String)
   val all: List[Endpoint] = List(
     Endpoint("GET", "/api/me", "自分の情報"),
     Endpoint("GET", "/api/overview", "ホーム（ストリーム・発生中のアラート・最近のアラートの履歴・今日の取り込みの行数）"),

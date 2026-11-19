@@ -17,10 +17,7 @@ import sbirds.http.Errors
  * MCP（Model Context Protocol）のサーバー。POST /mcp に JSON-RPC を送る（Streamable HTTP。応答は JSON、SSE は使わない）。
  * 認証は APIキー（Bearer）だけ。各ツールは REST API をそのキーで内部から呼ぶので、権限・スコープ・監査は REST API と同じになる。
  */
-final class McpRoutes(
-  api: HttpRoutes[IO],
-  sessions: SessionAuth,
-  publicUrl: String) extends Http4sDsl[IO] {
+final class McpRoutes(api: HttpRoutes[IO], sessions: SessionAuth, publicUrl: String) extends Http4sDsl[IO] {
 
   private val base = publicUrl.stripSuffix("/")
   private val Versions = List("2025-06-18", "2025-03-26", "2024-11-05")
@@ -31,9 +28,7 @@ final class McpRoutes(
     case GET -> Root / "api" / "endpoints" => getEndpoints()
   }
 
-  private def postMcp(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postMcp(req: Request[IO]): IO[Response[IO]] =
     req.headers.get[Authorization] match {
       case Some(auth @ Authorization(Credentials.Token(AuthScheme.Bearer, _))) =>
         sessions.fromRequest(Request[IO](Method.GET, Uri.unsafeFromString("/mcp")).putHeaders(auth)).flatMap {
@@ -66,13 +61,8 @@ final class McpRoutes(
 
   // ------------------------------------------------------------------ REST API の内部呼び出し
 
-  private final class Caller(
-    auth: Authorization) {
-    def apply(
-      method: Method,
-      uri: Uri,
-      body: Option[Json] = None
-    ): IO[Either[String, Json]] = {
+  private final class Caller(auth: Authorization) {
+    def apply(method: Method, uri: Uri, body: Option[Json] = None): IO[Either[String, Json]] = {
       val req0 = Request[IO](method, uri).putHeaders(auth, "X-Skorimako-Mcp" -> "1")
       val req = body.fold(req0)(req0.withEntity(_))
       api.run(req).value.flatMap {
@@ -87,22 +77,18 @@ final class McpRoutes(
     }
   }
 
-  private def path(
-    segments: String*
-  ): Uri = Uri(path = Uri.Path(segments.toVector.map(Uri.Path.Segment(_)), absolute = true))
+  private def path(segments: String*): Uri =
+    Uri(path = Uri.Path(segments.toVector.map(Uri.Path.Segment(_)), absolute = true))
 
   // ------------------------------------------------------------------ ツール
 
   private type Result = IO[Either[String, String]]
 
-  private final case class Tool(
-    name: String,
-    description: String,
-    schema: Json,
-    readOnly: Boolean,
-    destructive: Boolean = false
-  )(
-    val run: (Caller, ACursor) => Result) {
+  private final case class Tool(name: String,
+                                description: String,
+                                schema: Json,
+                                readOnly: Boolean,
+                                destructive: Boolean = false)(val run: (Caller, ACursor) => Result) {
     def json: Json = Json.obj(
       "name" -> name.asJson,
       "description" -> description.asJson,
@@ -115,50 +101,24 @@ final class McpRoutes(
     )
   }
 
-  private def schema(
-    required: List[String],
-    props: (String, Json)*
-  ): Json =
+  private def schema(required: List[String], props: (String, Json)*): Json =
     Json.obj("type" -> "object".asJson, "properties" -> Json.obj(props*), "required" -> required.asJson)
-  private def str(
-    d: String
-  ): Json = Json.obj("type" -> "string".asJson, "description" -> d.asJson)
-  private def int(
-    d: String
-  ): Json = Json.obj("type" -> "integer".asJson, "description" -> d.asJson)
-  private def num(
-    d: String
-  ): Json = Json.obj("type" -> "number".asJson, "description" -> d.asJson)
-  private def bool(
-    d: String
-  ): Json = Json.obj("type" -> "boolean".asJson, "description" -> d.asJson)
-  private def strs(
-    d: String
-  ): Json =
+  private def str(d: String): Json = Json.obj("type" -> "string".asJson, "description" -> d.asJson)
+  private def int(d: String): Json = Json.obj("type" -> "integer".asJson, "description" -> d.asJson)
+  private def num(d: String): Json = Json.obj("type" -> "number".asJson, "description" -> d.asJson)
+  private def bool(d: String): Json = Json.obj("type" -> "boolean".asJson, "description" -> d.asJson)
+  private def strs(d: String): Json =
     Json.obj("type" -> "array".asJson, "items" -> Json.obj("type" -> "string".asJson), "description" -> d.asJson)
-  private def obj(
-    d: String
-  ): Json = Json.obj("type" -> "object".asJson, "description" -> d.asJson)
+  private def obj(d: String): Json = Json.obj("type" -> "object".asJson, "description" -> d.asJson)
 
-  private def need(
-    a: ACursor,
-    k: String
-  ): Either[String, String] = a.get[String](k).toOption.map(_.trim).filter(_.nonEmpty).toRight(s"$k を指定してください")
-  private def opt(
-    a: ACursor,
-    k: String
-  ): Option[String] = a.get[String](k).toOption.map(_.trim).filter(_.nonEmpty)
+  private def need(a: ACursor, k: String): Either[String, String] =
+    a.get[String](k).toOption.map(_.trim).filter(_.nonEmpty).toRight(s"$k を指定してください")
+  private def opt(a: ACursor, k: String): Option[String] = a.get[String](k).toOption.map(_.trim).filter(_.nonEmpty)
 
-  extension [A](
-    e: Either[String, A]
-  ) {
-    private def withArgs(
-      f: A => Result
-    ): Result = e.fold(err => IO.pure(Left(err)), f)
+  extension [A](e: Either[String, A]) {
+    private def withArgs(f: A => Result): Result = e.fold(err => IO.pure(Left(err)), f)
   }
-  extension (
-    r: IO[Either[String, Json]]
-  ) {
+  extension (r: IO[Either[String, Json]]) {
     private def asText: Result = r.map(_.map(_.spaces2))
   }
 
@@ -168,20 +128,14 @@ final class McpRoutes(
     "end" -> str("終わり（ISO 8601。省略時は今）")
   )
 
-  private def instant(
-    s: String
-  ): Option[java.time.Instant] =
+  private def instant(s: String): Option[java.time.Instant] =
     scala.util.Try(
       java.time.OffsetDateTime.parse(s).toInstant
     ).orElse(scala.util.Try(java.time.Instant.parse(s))).toOption
 
   /** 時間の範囲（マイクロ秒）。 */
-  private def range(
-    a: ACursor
-  ): Either[String, (Long, Long)] = {
-    def us(
-      i: java.time.Instant
-    ) = i.getEpochSecond * 1000000L + i.getNano / 1000
+  private def range(a: ACursor): Either[String, (Long, Long)] = {
+    def us(i: java.time.Instant) = i.getEpochSecond * 1000000L + i.getNano / 1000
     val now = java.time.Instant.now()
     for {
       end <-
@@ -193,28 +147,20 @@ final class McpRoutes(
     } yield (us(start), us(end))
   }
 
-  private def time(
-    us: Long
-  ): String =
+  private def time(us: Long): String =
     java.time.Instant.ofEpochMilli(us / 1000).atZone(java.time.ZoneId.systemDefault()).toLocalDateTime.toString.replace(
       'T',
       ' '
     ).take(23)
 
   /** 検索の結果を表（タブ区切り）にする。長い値は切る。 */
-  private def table(
-    j: Json,
-    maxCell: Int = 300
-  ): String = {
+  private def table(j: Json, maxCell: Int = 300): String = {
     val c = j.hcursor
     val cols = c.downField("columns").as[List[Json]].getOrElse(Nil).map(_.hcursor.get[String]("name").getOrElse(""))
     val rows = c.downField("rows").as[List[List[Json]]].getOrElse(Nil)
     val tsIx = cols.indexOf(Columns.Timestamp)
     val body = rows.map(_.zipWithIndex.map {
-      (
-        v,
-        i
-      ) =>
+      (v, i) =>
         if i == tsIx then v.asNumber.flatMap(_.toLong).map(time).getOrElse("")
         else
           (v.asString.getOrElse(if v.isNull then "" else v.noSpaces)).replace(
@@ -227,11 +173,8 @@ final class McpRoutes(
   }
 
   private val tools: List[Tool] = List(
-    Tool("get_me", "自分（この APIキーの持ち主）の情報。", schema(Nil), readOnly = true)(
-      (
-        call,
-        _
-      ) => call(Method.GET, path("api", "me")).asText
+    Tool("get_me", "自分（この APIキーの持ち主）の情報。", schema(Nil), readOnly = true)((call, _) =>
+      call(Method.GET, path("api", "me")).asText
     ),
     Tool(
       "list_streams",
@@ -239,27 +182,18 @@ final class McpRoutes(
       schema(Nil, "type" -> str("logs・metrics・traces・rum"), "q" -> str("名前の一部")),
       readOnly = true
     ) {
-      (
-        call,
-        a
-      ) =>
+      (call, a) =>
         val u = List(
           "type" -> opt(a, "type"),
           "q" -> opt(a, "q")
-        ).collect { case (k, Some(v)) => k -> v }.foldLeft(path("api", "streams"))(
-          (
-            u,
-            kv
-          ) => u.withQueryParam(kv._1, kv._2)
+        ).collect { case (k, Some(v)) => k -> v }.foldLeft(path("api", "streams"))((u, kv) =>
+          u.withQueryParam(kv._1, kv._2)
         )
         call(Method.GET, u).map(_.map(j =>
           j.asArray.toList.flatten.map { s =>
             val c = s.hcursor
-            val range = (c.get[Long]("minTs").toOption, c.get[Long]("maxTs").toOption).mapN(
-              (
-                a,
-                b
-              ) => s"${time(a)}〜${time(b)}"
+            val range = (c.get[Long]("minTs").toOption, c.get[Long]("maxTs").toOption).mapN((a, b) =>
+              s"${time(a)}〜${time(b)}"
             ).getOrElse("データなし")
             s"- ${c.get[String]("streamType").getOrElse("")}/${c.get[String]("name").getOrElse("")} 行数 ${c.get[Long]("docCount").getOrElse(0L)} $range" +
               c.get[String]("description").toOption.filter(_.nonEmpty).fold("")(d => s" — $d") +
@@ -273,21 +207,14 @@ final class McpRoutes(
       schema(List("type", "name"), "type" -> str("logs・metrics・traces・rum"), "name" -> str("ストリーム名")),
       readOnly = true
     ) {
-      (
-        call,
-        a
-      ) =>
-        (need(a, "type"), need(a, "name")).tupled.withArgs(
-          (
-            t,
-            n
-          ) =>
-            call(Method.GET, path("api", "streams", t, n)).map(_.map { j =>
-              j.hcursor.downField("fields").as[List[Json]].getOrElse(Nil).map(f =>
-                s"${f.hcursor.get[String]("name").getOrElse("")}\t${f.hcursor.get[String]("fieldType").getOrElse("")}"
-              )
-                .mkString(s"${Columns.Timestamp}\tint64（マイクロ秒）\n", "\n", "")
-            })
+      (call, a) =>
+        (need(a, "type"), need(a, "name")).tupled.withArgs((t, n) =>
+          call(Method.GET, path("api", "streams", t, n)).map(_.map { j =>
+            j.hcursor.downField("fields").as[List[Json]].getOrElse(Nil).map(f =>
+              s"${f.hcursor.get[String]("name").getOrElse("")}\t${f.hcursor.get[String]("fieldType").getOrElse("")}"
+            )
+              .mkString(s"${Columns.Timestamp}\tint64（マイクロ秒）\n", "\n", "")
+          })
         )
     },
     Tool(
@@ -305,10 +232,7 @@ final class McpRoutes(
       ),
       readOnly = true
     ) {
-      (
-        call,
-        a
-      ) =>
+      (call, a) =>
         (need(a, "stream"), range(a)).tupled.withArgs { case (s, (st, en)) =>
           call(
             Method.POST,
@@ -341,10 +265,7 @@ final class McpRoutes(
       ),
       readOnly = true
     ) {
-      (
-        call,
-        a
-      ) =>
+      (call, a) =>
         (need(a, "streamType"), need(a, "sql"), range(a)).tupled.withArgs { case (t, sql, (st, en)) =>
           call(
             Method.POST,
@@ -368,10 +289,7 @@ final class McpRoutes(
       ),
       readOnly = true
     ) {
-      (
-        call,
-        a
-      ) =>
+      (call, a) =>
         (need(a, "metric"), range(a)).tupled.withArgs { case (m, (st, en)) =>
           val r = MetricQueryReq(
             m,
@@ -386,12 +304,7 @@ final class McpRoutes(
             j.hcursor.downField("series").as[List[SeriesDto]].getOrElse(Nil).map { s =>
               val label = if s.labels.isEmpty then "（全体）"
               else
-                s.labels.map(
-                  (
-                    k,
-                    v
-                  ) => s"$k=$v"
-                ).mkString(", ")
+                s.labels.map((k, v) => s"$k=$v").mkString(", ")
               s"■ $label\n" +
                 s.points.map(p => s"${time(p.t)}\t${p.v.map(AlertLogic.fmt).getOrElse("")}").mkString("\n")
             }.mkString("\n")
@@ -413,15 +326,9 @@ final class McpRoutes(
       ),
       readOnly = true
     ) {
-      (
-        call,
-        a
-      ) =>
+      (call, a) =>
         range(a).withArgs {
-          (
-            st,
-            en
-          ) =>
+          (st, en) =>
             val r = TraceSearchReq(
               st,
               en,
@@ -445,10 +352,7 @@ final class McpRoutes(
       schema(List("traceId"), "traceId" -> str("トレース ID（16進数）")),
       readOnly = true
     ) {
-      (
-        call,
-        a
-      ) =>
+      (call, a) =>
         need(a, "traceId").withArgs(id =>
           call(Method.GET, path("api", "traces", id)).map(_.map { j =>
             j.hcursor.downField("spans").as[List[Json]].getOrElse(Nil).map { s =>
@@ -474,10 +378,7 @@ final class McpRoutes(
       schema(List("query"), (List("query" -> str("PromQL"), "stepSeconds" -> int("区切りの秒（既定は範囲の1/60）")) ++ timeProps)*),
       readOnly = true
     ) {
-      (
-        call,
-        a
-      ) =>
+      (call, a) =>
         (need(a, "query"), range(a)).tupled.withArgs { case (q, (st, en)) =>
           val step = a.get[Int]("stepSeconds").toOption.map(_.toLong).getOrElse(math.max(15L, (en - st) / 1000000 / 60))
           val u = path("api", "prom", "api", "v1", "query_range").withQueryParams(Map(
@@ -493,19 +394,9 @@ final class McpRoutes(
               s"■ ${
                   if m.isEmpty then "（全体）"
                   else
-                    m.toList.sorted.map(
-                      (
-                        k,
-                        v
-                      ) => s"$k=$v"
-                    ).mkString(", ")
+                    m.toList.sorted.map((k, v) => s"$k=$v").mkString(", ")
                 }\n" +
-                vs.map(
-                  (
-                    t,
-                    v
-                  ) => s"${time((t * 1000000).toLong)}\t$v"
-                ).mkString("\n")
+                vs.map((t, v) => s"${time((t * 1000000).toLong)}\t$v").mkString("\n")
             }.mkString("\n")
           })
         }
@@ -516,15 +407,9 @@ final class McpRoutes(
       schema(Nil, (List("stream" -> str("トレースのストリーム（既定 default）")) ++ timeProps)*),
       readOnly = true
     ) {
-      (
-        call,
-        a
-      ) =>
+      (call, a) =>
         range(a).withArgs {
-          (
-            st,
-            en
-          ) =>
+          (st, en) =>
             val u = path("api", "services", "map").withQueryParams(Map(
               "stream" -> opt(a, "stream").getOrElse("default"),
               "start" -> st.toString,
@@ -542,10 +427,7 @@ final class McpRoutes(
         }
     },
     Tool("list_alerts", "アラートのルールと今の状態（正常・発生中・評価できない）。", schema(Nil), readOnly = true) {
-      (
-        call,
-        _
-      ) =>
+      (call, _) =>
         call(Method.GET, path("api", "alerts")).map(_.map(j =>
           j.as[List[AlertRuleDto]].getOrElse(Nil).map { r =>
             val extra = r.ack.map(a => s"・対応中（${a.by.map(_.name).getOrElse("")}）").getOrElse("") +
@@ -560,10 +442,7 @@ final class McpRoutes(
       schema(Nil, "ruleId" -> str("ルールの ID"), "limit" -> int("件数（既定30）")),
       readOnly = true
     ) {
-      (
-        call,
-        a
-      ) =>
+      (call, a) =>
         val u = path("api", "alerts", "events").withQueryParam("limit", a.get[Int]("limit").getOrElse(30))
         call(Method.GET, opt(a, "ruleId").fold(u)(r => u.withQueryParam("ruleId", r))).map(_.map(j =>
           j.as[List[AlertEventDto]].getOrElse(Nil).map { e =>
@@ -577,10 +456,7 @@ final class McpRoutes(
       schema(Nil),
       readOnly = true
     ) {
-      (
-        _,
-        _
-      ) =>
+      (_, _) =>
         IO.pure(Right(ApiCatalog.all.map(e => s"${e.method} ${e.path} — ${e.description}").mkString("\n")))
     },
     Tool(
@@ -594,15 +470,9 @@ final class McpRoutes(
       ),
       readOnly = false
     ) {
-      (
-        call,
-        a
-      ) =>
+      (call, a) =>
         (need(a, "method").map(_.toUpperCase), need(a, "path")).tupled.withArgs {
-          (
-            m,
-            p
-          ) =>
+          (m, p) =>
             (
               Method.fromString(m).toOption.filter(x => Set("GET", "POST", "PUT", "PATCH", "DELETE")(x.name)),
               Uri.fromString(p).toOption.filter(_.path.renderString.startsWith("/api/"))
@@ -619,29 +489,16 @@ final class McpRoutes(
 
   // ------------------------------------------------------------------ JSON-RPC
 
-  private def ok(
-    id: Json,
-    result: Json
-  ): Json = Json.obj("jsonrpc" -> "2.0".asJson, "id" -> id, "result" -> result)
-  private def rpcFail(
-    id: Json,
-    code: Int,
-    msg: String
-  ): Json =
+  private def ok(id: Json, result: Json): Json = Json.obj("jsonrpc" -> "2.0".asJson, "id" -> id, "result" -> result)
+  private def rpcFail(id: Json, code: Int, msg: String): Json =
     Json.obj("jsonrpc" -> "2.0".asJson, "id" -> id, "error" -> Json.obj("code" -> code.asJson, "message" -> msg.asJson))
-  private def toolResult(
-    r: Either[String, String]
-  ): Json =
+  private def toolResult(r: Either[String, String]): Json =
     Json.obj(
       "content" -> Json.arr(Json.obj("type" -> "text".asJson, "text" -> r.merge.asJson)),
       "isError" -> r.isLeft.asJson
     )
 
-  private def handle(
-    call: Caller,
-    s: AuthSession,
-    msg: Json
-  ): IO[Option[Json]] = {
+  private def handle(call: Caller, s: AuthSession, msg: Json): IO[Option[Json]] = {
     val c = msg.hcursor
     val params = c.downField("params")
     c.downField("id").focus match {

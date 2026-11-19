@@ -4,9 +4,7 @@ package skorimako.core
 object Names {
 
   /** 列名: 英小文字・数字・_ だけにする（service.name → service_name）。長さは100文字まで。空なら None。 */
-  def column(
-    raw: String
-  ): Option[String] = {
+  def column(raw: String): Option[String] = {
     val b = new StringBuilder
     raw.foreach { c =>
       val l = c.toLower
@@ -17,9 +15,7 @@ object Names {
   }
 
   /** ストリーム名: 英数字・_・-・. を 1〜100 文字（. は _ に揃える）。 */
-  def stream(
-    raw: String
-  ): Either[String, String] = {
+  def stream(raw: String): Either[String, String] = {
     val s = raw.trim.replace('.', '_')
     if s.isEmpty then Left("ストリームの名前を指定してください")
     else if s.length > 100 then Left("ストリームの名前は100文字までにしてください")
@@ -28,7 +24,5 @@ object Names {
   }
 
   /** メトリクスの名前からストリーム名（http.server.duration → http_server_duration）。 */
-  def metric(
-    raw: String
-  ): Option[String] = column(raw)
+  def metric(raw: String): Option[String] = column(raw)
 }

@@ -12,10 +12,7 @@ import scala.collection.mutable
 object Prom {
 
   type Labels = Map[String, String]
-  final case class Series(
-    labels: Labels,
-    ts: Array[Long],
-    vs: Array[Double]) // ts はミリ秒（昇順）
+  final case class Series(labels: Labels, ts: Array[Long], vs: Array[Double]) // ts はミリ秒（昇順）
 
   enum V {
     case Scalar(
@@ -46,18 +43,11 @@ object Prom {
   val LookbackDelta = 300000L
   private val NameLabel = "__name__"
 
-  private def dropName(
-    l: Labels
-  ): Labels = l - NameLabel
+  private def dropName(l: Labels): Labels = l - NameLabel
 
-  final class Evaluator(
-    data: Map[Expr.Selector, List[Series]]) {
+  final class Evaluator(data: Map[Expr.Selector, List[Series]]) {
 
-    private def window(
-      s: Series,
-      from: Long,
-      to: Long
-    ): (Array[Long], Array[Double]) = {
+    private def window(s: Series, from: Long, to: Long): (Array[Long], Array[Double]) = {
       // (from, to] の点
       var a = java.util.Arrays.binarySearch(s.ts, from)
       a = if a >= 0 then a + 1 else -a - 1
@@ -66,21 +56,13 @@ object Prom {
       (s.ts.slice(a, b), s.vs.slice(a, b))
     }
 
-    def eval(
-      e: Expr,
-      t: Long
-    ): V = e match {
+    def eval(e: Expr, t: Long): V = e match {
       case Expr.Num(v) => V.Scalar(v)
       case Expr.Str(s) => V.Str(s)
       case Expr.Paren(x) => eval(x, t)
       case Expr.Neg(x) => eval(x, t) match {
           case V.Scalar(v) => V.Scalar(-v)
-          case V.Instant(xs) => V.Instant(xs.map(
-              (
-                l,
-                v
-              ) => dropName(l) -> -v
-            ))
+          case V.Instant(xs) => V.Instant(xs.map((l, v) => dropName(l) -> -v))
           case _ => throw QueryError("単項の - は数値かベクトルにだけ使えます")
         }
       case s: Expr.Selector =>
@@ -102,22 +84,12 @@ object Prom {
         val acc = mutable.LinkedHashMap.empty[Labels, mutable.ArrayBuffer[(Long, Double)]]
         ts.foreach(tt =>
           eval(x, tt) match {
-            case V.Instant(xs) => xs.foreach(
-                (
-                  l,
-                  v
-                ) => acc.getOrElseUpdate(l, mutable.ArrayBuffer.empty) += tt -> v
-              )
+            case V.Instant(xs) => xs.foreach((l, v) => acc.getOrElseUpdate(l, mutable.ArrayBuffer.empty) += tt -> v)
             case V.Scalar(v) => acc.getOrElseUpdate(Map.empty, mutable.ArrayBuffer.empty) += tt -> v
             case _ => throw QueryError("サブクエリの中はベクトルにしてください")
           }
         )
-        V.Range(acc.toList.map(
-          (
-            l,
-            ps
-          ) => (l, ps.map(_._1).toArray, ps.map(_._2).toArray)
-        ))
+        V.Range(acc.toList.map((l, ps) => (l, ps.map(_._1).toArray, ps.map(_._2).toArray)))
       case Expr.Call(fn, args) => call(fn, args, t)
       case Expr.Agg(op, param, x, by, without) => aggregate(op, param.map(eval(_, t)), eval(x, t), by, without)
       case Expr.Binary(op, l, r, bool, m) => binary(op, eval(l, t), eval(r, t), bool, m)
@@ -125,38 +97,27 @@ object Prom {
 
     // ---------------------------------------------------------------- 関数
 
-    private def instant(
-      v: V,
-      fn: String
-    ): List[(Labels, Double)] = v match {
+    private def instant(v: V, fn: String): List[(Labels, Double)] = v match {
       case V.Instant(xs) => xs
       case _ => throw QueryError(s"$fn にはベクトルを渡してください")
     }
 
-    private def range(
-      v: V,
-      fn: String
-    ): List[(Labels, Array[Long], Array[Double])] = v match {
+    private def range(v: V, fn: String): List[(Labels, Array[Long], Array[Double])] = v match {
       case V.Range(xs) => xs
       case _ => throw QueryError(s"$fn には範囲（[5m] など）を付けたセレクターを渡してください")
     }
 
-    private def scalar(
-      v: V,
-      fn: String
-    ): Double = v match {
+    private def scalar(v: V, fn: String): Double = v match {
       case V.Scalar(x) => x
       case _ => throw QueryError(s"$fn の引数には数値を渡してください")
     }
 
-    private def extrapolated(
-      ts: Array[Long],
-      vs: Array[Double],
-      from: Long,
-      to: Long,
-      counter: Boolean,
-      rate: Boolean
-    ): Option[Double] =
+    private def extrapolated(ts: Array[Long],
+                             vs: Array[Double],
+                             from: Long,
+                             to: Long,
+                             counter: Boolean,
+                             rate: Boolean): Option[Double] =
       if ts.length < 2 then None
       else {
         var result = vs.last - vs.head
@@ -181,17 +142,9 @@ object Prom {
         Some(result * factor)
       }
 
-    private def call(
-      fn: String,
-      args: List[Expr],
-      t: Long
-    ): V = {
-      def arg(
-        i: Int
-      ): V = args.lift(i).map(eval(_, t)).getOrElse(throw QueryError(s"$fn の引数が足りません"))
-      def rangeOf(
-        i: Int
-      ): (Long, List[(Labels, Array[Long], Array[Double])]) = {
+    private def call(fn: String, args: List[Expr], t: Long): V = {
+      def arg(i: Int): V = args.lift(i).map(eval(_, t)).getOrElse(throw QueryError(s"$fn の引数が足りません"))
+      def rangeOf(i: Int): (Long, List[(Labels, Array[Long], Array[Double])]) = {
         val r = args.lift(i) match {
           case Some(s: Expr.Selector) => s.range.getOrElse(0L)
           case Some(Expr.Subquery(_, r, _)) => r
@@ -199,39 +152,17 @@ object Prom {
         }
         (r, range(arg(i), fn))
       }
-      def overTime(
-        f: (Array[Long], Array[Double]) => Option[Double]
-      ): V =
-        V.Instant(range(arg(0), fn).flatMap(
-          (
-            l,
-            ts,
-            vs
-          ) => f(ts, vs).map(dropName(l) -> _)
-        ))
-      def math1(
-        f: Double => Double
-      ): V = V.Instant(instant(arg(0), fn).map(
-        (
-          l,
-          v
-        ) => dropName(l) -> f(v)
-      ))
+      def overTime(f: (Array[Long], Array[Double]) => Option[Double]): V =
+        V.Instant(range(arg(0), fn).flatMap((l, ts, vs) => f(ts, vs).map(dropName(l) -> _)))
+      def math1(f: Double => Double): V = V.Instant(instant(arg(0), fn).map((l, v) => dropName(l) -> f(v)))
       fn match {
         case "rate" | "increase" | "delta" =>
           val (r, xs) = rangeOf(0)
-          V.Instant(xs.flatMap(
-            (
-              l,
-              ts,
-              vs
-            ) => extrapolated(ts, vs, t - r, t, fn != "delta", fn == "rate").map(dropName(l) -> _)
+          V.Instant(xs.flatMap((l, ts, vs) =>
+            extrapolated(ts, vs, t - r, t, fn != "delta", fn == "rate").map(dropName(l) -> _)
           ))
         case "irate" | "idelta" => overTime {
-            (
-              ts,
-              vs
-            ) =>
+            (ts, vs) =>
               if ts.length < 2 then None
               else {
                 val d = vs.last - vs(vs.length - 2)
@@ -240,10 +171,7 @@ object Prom {
               }
           }
         case "deriv" => overTime {
-            (
-              ts,
-              vs
-            ) =>
+            (ts, vs) =>
               if ts.length < 2 then None
               else {
                 val xs = ts.map(_ / 1000.0); val mx = xs.sum / xs.length; val my = vs.sum / vs.length
@@ -252,79 +180,26 @@ object Prom {
                 Option.when(den != 0)(num / den)
               }
           }
-        case "avg_over_time" => overTime(
-            (
-              _,
-              vs
-            ) => Option.when(vs.nonEmpty)(vs.sum / vs.length)
-          )
-        case "min_over_time" => overTime(
-            (
-              _,
-              vs
-            ) => vs.minOption
-          )
-        case "max_over_time" => overTime(
-            (
-              _,
-              vs
-            ) => vs.maxOption
-          )
-        case "sum_over_time" => overTime(
-            (
-              _,
-              vs
-            ) => Some(vs.sum)
-          )
-        case "count_over_time" => overTime(
-            (
-              _,
-              vs
-            ) => Some(vs.length.toDouble)
-          )
-        case "present_over_time" => overTime(
-            (
-              _,
-              vs
-            ) => Option.when(vs.nonEmpty)(1.0)
-          )
-        case "last_over_time" => V.Instant(range(arg(0), fn).flatMap(
-            (
-              l,
-              _,
-              vs
-            ) => vs.lastOption.map(l -> _)
-          ))
+        case "avg_over_time" => overTime((_, vs) => Option.when(vs.nonEmpty)(vs.sum / vs.length))
+        case "min_over_time" => overTime((_, vs) => vs.minOption)
+        case "max_over_time" => overTime((_, vs) => vs.maxOption)
+        case "sum_over_time" => overTime((_, vs) => Some(vs.sum))
+        case "count_over_time" => overTime((_, vs) => Some(vs.length.toDouble))
+        case "present_over_time" => overTime((_, vs) => Option.when(vs.nonEmpty)(1.0))
+        case "last_over_time" => V.Instant(range(arg(0), fn).flatMap((l, _, vs) => vs.lastOption.map(l -> _)))
         case "stddev_over_time" => overTime {
-            (
-              _,
-              vs
-            ) =>
+            (_, vs) =>
               Option.when(vs.nonEmpty) {
                 val m = vs.sum / vs.length; math.sqrt(vs.map(v => (v - m) * (v - m)).sum / vs.length)
               }
           }
         case "quantile_over_time" =>
           val q = scalar(arg(0), fn)
-          V.Instant(range(arg(1), fn).flatMap(
-            (
-              l,
-              _,
-              vs
-            ) => Option.when(vs.nonEmpty)(dropName(l) -> quantile(q, vs.toList))
+          V.Instant(range(arg(1), fn).flatMap((l, _, vs) =>
+            Option.when(vs.nonEmpty)(dropName(l) -> quantile(q, vs.toList))
           ))
-        case "changes" => overTime(
-            (
-              _,
-              vs
-            ) => Some(vs.sliding(2).count(p => p.length == 2 && p(0) != p(1)).toDouble)
-          )
-        case "resets" => overTime(
-            (
-              _,
-              vs
-            ) => Some(vs.sliding(2).count(p => p.length == 2 && p(1) < p(0)).toDouble)
-          )
+        case "changes" => overTime((_, vs) => Some(vs.sliding(2).count(p => p.length == 2 && p(0) != p(1)).toDouble))
+        case "resets" => overTime((_, vs) => Some(vs.sliding(2).count(p => p.length == 2 && p(1) < p(0)).toDouble))
         case "abs" => math1(math.abs)
         case "ceil" => math1(math.ceil)
         case "floor" => math1(math.floor)
@@ -347,12 +222,7 @@ object Prom {
           }
         case "vector" => V.Instant(List(Map.empty -> scalar(arg(0), fn)))
         case "time" => V.Scalar(t / 1000.0)
-        case "timestamp" => V.Instant(instant(arg(0), fn).map(
-            (
-              l,
-              _
-            ) => dropName(l) -> t / 1000.0
-          ))
+        case "timestamp" => V.Instant(instant(arg(0), fn).map((l, _) => dropName(l) -> t / 1000.0))
         case "sort" => V.Instant(instant(arg(0), fn).sortBy(_._2))
         case "sort_desc" => V.Instant(instant(arg(0), fn).sortBy(-_._2))
         case "absent" =>
@@ -369,18 +239,12 @@ object Prom {
             case _ => throw QueryError("label_replace(v, \"dst\", \"replacement\", \"src\", \"regex\") の形で書いてください")
           }
           V.Instant(instant(arg(0), fn).map {
-            (
-              l,
-              v
-            ) =>
+            (l, v) =>
               val sv = l.getOrElse(src, "")
               re.unapplySeq(sv) match {
                 case Some(groups) =>
-                  val out = groups.zipWithIndex.foldLeft(repl)(
-                    (
-                      acc,
-                      gi
-                    ) => acc.replace("$" + (gi._2 + 1), Option(gi._1).getOrElse(""))
+                  val out = groups.zipWithIndex.foldLeft(repl)((acc, gi) =>
+                    acc.replace("$" + (gi._2 + 1), Option(gi._1).getOrElse(""))
                   )
                   (if out.isEmpty then l - dst else l + (dst -> out)) -> v
                 case None => l -> v
@@ -389,24 +253,12 @@ object Prom {
         case "histogram_quantile" =>
           val q = scalar(arg(0), fn)
           val xs = instant(arg(1), fn)
-          V.Instant(xs.groupBy(
-            (
-              l,
-              _
-            ) => dropName(l) - "le"
-          ).toList.flatMap {
-            (
-              ls,
-              bs
-            ) =>
-              val buckets = bs.flatMap(
-                (
-                  l,
-                  v
-                ) =>
-                  l.get("le").flatMap(le =>
-                    (if le == "+Inf" then Some(Double.PositiveInfinity) else le.toDoubleOption).map(_ -> v)
-                  )
+          V.Instant(xs.groupBy((l, _) => dropName(l) - "le").toList.flatMap {
+            (ls, bs) =>
+              val buckets = bs.flatMap((l, v) =>
+                l.get("le").flatMap(le =>
+                  (if le == "+Inf" then Some(Double.PositiveInfinity) else le.toDoubleOption).map(_ -> v)
+                )
               )
               Option.when(buckets.nonEmpty)(ls -> bucketQuantile(q, buckets))
           })
@@ -414,10 +266,7 @@ object Prom {
       }
     }
 
-    private def bucketQuantile(
-      q: Double,
-      bs0: List[(Double, Double)]
-    ): Double =
+    private def bucketQuantile(q: Double, bs0: List[(Double, Double)]): Double =
       if q < 0 then Double.NegativeInfinity
       else if q > 1 then Double.PositiveInfinity
       else {
@@ -443,10 +292,7 @@ object Prom {
         }
       }
 
-    private def quantile(
-      q: Double,
-      vs: List[Double]
-    ): Double =
+    private def quantile(q: Double, vs: List[Double]): Double =
       if vs.isEmpty then Double.NaN
       else if q < 0 then Double.NegativeInfinity
       else if q > 1 then Double.PositiveInfinity
@@ -459,45 +305,19 @@ object Prom {
 
     // ---------------------------------------------------------------- 集計
 
-    private def aggregate(
-      op: String,
-      param: Option[V],
-      v: V,
-      by: List[String],
-      without: Boolean
-    ): V = {
+    private def aggregate(op: String, param: Option[V], v: V, by: List[String], without: Boolean): V = {
       val xs = instant(v, op)
-      def key(
-        l: Labels
-      ): Labels = if without then dropName(l) -- by
+      def key(l: Labels): Labels = if without then dropName(l) -- by
       else
-        l.filter(
-          (
-            k,
-            _
-          ) => by.contains(k)
-        )
-      val groups = xs.groupBy(
-        (
-          l,
-          _
-        ) => key(l)
-      ).toList
+        l.filter((k, _) => by.contains(k))
+      val groups = xs.groupBy((l, _) => key(l)).toList
       op match {
         case "topk" | "bottomk" =>
           val k = param.map(scalar(_, op)).getOrElse(1.0).toInt
-          V.Instant(groups.flatMap(
-            (
-              _,
-              g
-            ) => (if op == "topk" then g.sortBy(-_._2) else g.sortBy(_._2)).take(k)
-          ))
+          V.Instant(groups.flatMap((_, g) => (if op == "topk" then g.sortBy(-_._2) else g.sortBy(_._2)).take(k)))
         case _ =>
           V.Instant(groups.map {
-            (
-              k,
-              g
-            ) =>
+            (k, g) =>
               val vs = g.map(_._2)
               k ->
                 (op match {
@@ -522,11 +342,7 @@ object Prom {
 
     private val comparisons = Set("==", "!=", ">", "<", ">=", "<=")
 
-    private def arith(
-      op: String,
-      a: Double,
-      b: Double
-    ): Double = op match {
+    private def arith(op: String, a: Double, b: Double): Double = op match {
       case "+" => a + b
       case "-" => a - b
       case "*" => a * b
@@ -542,82 +358,37 @@ object Prom {
       case _ => throw QueryError(s"演算子 $op は数値には使えません")
     }
 
-    private def signature(
-      l: Labels,
-      m: Option[VectorMatching]
-    ): Labels = m match {
-      case Some(VectorMatching(true, ls, _, _)) => l.filter(
-          (
-            k,
-            _
-          ) => ls.contains(k)
-        )
+    private def signature(l: Labels, m: Option[VectorMatching]): Labels = m match {
+      case Some(VectorMatching(true, ls, _, _)) => l.filter((k, _) => ls.contains(k))
       case Some(VectorMatching(false, ls, _, _)) => dropName(l) -- ls
       case None => dropName(l)
     }
 
-    private def binary(
-      op: String,
-      l: V,
-      r: V,
-      bool: Boolean,
-      m: Option[VectorMatching]
-    ): V = {
+    private def binary(op: String, l: V, r: V, bool: Boolean, m: Option[VectorMatching]): V = {
       val cmp = comparisons.contains(op)
       (l, r) match {
         case (V.Scalar(a), V.Scalar(b)) =>
           if cmp && !bool then throw QueryError("数値どうしの比較には bool を付けてください") else V.Scalar(arith(op, a, b))
         case (V.Instant(xs), V.Scalar(b)) =>
           V.Instant(xs.flatMap {
-            (
-              lb,
-              a
-            ) =>
+            (lb, a) =>
               val v = arith(op, a, b)
               if cmp && !bool then Option.when(v == 1)(lb -> a) else Some(dropName(lb) -> v)
           })
         case (V.Scalar(a), V.Instant(xs)) =>
           V.Instant(xs.flatMap {
-            (
-              lb,
-              b
-            ) =>
+            (lb, b) =>
               val v = arith(op, a, b)
               if cmp && !bool then Option.when(v == 1)(lb -> b) else Some(dropName(lb) -> v)
           })
         case (V.Instant(ls), V.Instant(rs)) if Set("and", "or", "unless").contains(op) =>
-          val rsig = rs.map(
-            (
-              lb,
-              _
-            ) => signature(lb, m)
-          ).toSet
+          val rsig = rs.map((lb, _) => signature(lb, m)).toSet
           op match {
-            case "and" => V.Instant(ls.filter(
-                (
-                  lb,
-                  _
-                ) => rsig.contains(signature(lb, m))
-              ))
-            case "unless" => V.Instant(ls.filterNot(
-                (
-                  lb,
-                  _
-                ) => rsig.contains(signature(lb, m))
-              ))
+            case "and" => V.Instant(ls.filter((lb, _) => rsig.contains(signature(lb, m))))
+            case "unless" => V.Instant(ls.filterNot((lb, _) => rsig.contains(signature(lb, m))))
             case _ =>
-              val lsig = ls.map(
-                (
-                  lb,
-                  _
-                ) => signature(lb, m)
-              ).toSet
-              V.Instant(ls ++ rs.filterNot(
-                (
-                  lb,
-                  _
-                ) => lsig.contains(signature(lb, m))
-              ))
+              val lsig = ls.map((lb, _) => signature(lb, m)).toSet
+              V.Instant(ls ++ rs.filterNot((lb, _) => lsig.contains(signature(lb, m))))
           }
         case (V.Instant(ls), V.Instant(rs)) =>
           val group = m.flatMap(_.group)
@@ -625,32 +396,16 @@ object Prom {
             case Some("group_right") => (ls, rs, false)
             case _ => (rs, ls, true)
           }
-          val oneBySig = one.groupBy(
-            (
-              lb,
-              _
-            ) => signature(lb, m)
-          )
+          val oneBySig = one.groupBy((lb, _) => signature(lb, m))
           if oneBySig.exists(_._2.size > 1) then
             throw QueryError("ベクトルの照合で、片方に同じラベルの組が複数あります（on・ignoring・group_left を使ってください）")
-          val manyBySig = many.groupBy(
-            (
-              lb,
-              _
-            ) => signature(lb, m)
-          )
+          val manyBySig = many.groupBy((lb, _) => signature(lb, m))
           if group.isEmpty && manyBySig.exists(_._2.size > 1) then
             throw QueryError("ベクトルの照合で、同じラベルの組が複数あります（group_left・group_right を使ってください）")
           V.Instant(many.flatMap {
-            (
-              mlb,
-              mv
-            ) =>
+            (mlb, mv) =>
               oneBySig.get(signature(mlb, m)).flatMap(_.headOption).flatMap {
-                (
-                  olb,
-                  ov
-                ) =>
+                (olb, ov) =>
                   val (a, b) = if manyIsLeft then (mv, ov) else (ov, mv)
                   val v = arith(op, a, b)
                   val base: Labels =
@@ -669,69 +424,40 @@ object Prom {
   // ---------------------------------------------------------------- 実行
 
   /** 範囲の問い合わせ（start・end・step はミリ秒）。 */
-  def range(
-    e: Expr,
-    data: Map[Expr.Selector, List[Series]],
-    start: Long,
-    end: Long,
-    step: Long
-  ): Result = {
+  def range(e: Expr, data: Map[Expr.Selector, List[Series]], start: Long, end: Long, step: Long): Result = {
     val ev = new Evaluator(data)
     val acc = mutable.LinkedHashMap.empty[Labels, mutable.ArrayBuffer[(Long, Double)]]
     var t = start
     while t <= end do {
       ev.eval(e, t) match {
-        case V.Instant(xs) => xs.foreach(
-            (
-              l,
-              v
-            ) => if !v.isNaN then acc.getOrElseUpdate(l, mutable.ArrayBuffer.empty) += t -> v
-          )
+        case V.Instant(xs) =>
+          xs.foreach((l, v) => if !v.isNaN then acc.getOrElseUpdate(l, mutable.ArrayBuffer.empty) += t -> v)
         case V.Scalar(v) => acc.getOrElseUpdate(Map.empty, mutable.ArrayBuffer.empty) += t -> v
         case _ => throw QueryError("範囲の問い合わせの結果はベクトルか数値にしてください")
       }
       if acc.size > 10000 then throw QueryError("系列が多すぎます（1万まで）。集計（sum by など）で減らしてください")
       t += step
     }
-    Result.Matrix(acc.toList.map(
-      (
-        l,
-        ps
-      ) => l -> ps.toVector
-    ))
+    Result.Matrix(acc.toList.map((l, ps) => l -> ps.toVector))
   }
 
   /** 時刻 t の問い合わせ。 */
-  def instant(
-    e: Expr,
-    data: Map[Expr.Selector, List[Series]],
-    t: Long
-  ): Result =
+  def instant(e: Expr, data: Map[Expr.Selector, List[Series]], t: Long): Result =
     new Evaluator(data).eval(e, t) match {
       case V.Instant(xs) => Result.Vec(t, xs)
       case V.Scalar(v) => Result.Scal(t, v)
       case V.Str(s) => Result.Strg(t, s)
-      case V.Range(xs) => Result.Matrix(xs.map(
-          (
-            l,
-            ts,
-            vs
-          ) => l -> ts.zip(vs).toVector
-        ))
+      case V.Range(xs) => Result.Matrix(xs.map((l, ts, vs) => l -> ts.zip(vs).toVector))
     }
 
   /** セレクターの対象のメトリクスのストリームの名前。 */
-  def metricName(
-    s: Expr.Selector
-  ): Option[String] =
+  def metricName(s: Expr.Selector): Option[String] =
     s.name.orElse(
       s.matchers.collectFirst { case m if m.label == NameLabel && m.op == MatchOp.Eq => m.value }
     ).flatMap(Names.metric)
 
   /** セレクターの条件のうち SQL にできるもの（= と !=）。正規表現は読んだ後で確かめる。 */
-  def sqlConds(
-    s: Expr.Selector
-  ): List[String] =
+  def sqlConds(s: Expr.Selector): List[String] =
     s.matchers.filter(m => m.label != NameLabel && (m.op == MatchOp.Eq || m.op == MatchOp.Ne)).flatMap { m =>
       Names.column(m.label).map { c =>
         val col = SqlText.ident(c)
@@ -743,10 +469,7 @@ object Prom {
       }
     }
 
-  def regexOk(
-    s: Expr.Selector,
-    labels: Labels
-  ): Boolean =
+  def regexOk(s: Expr.Selector, labels: Labels): Boolean =
     s.matchers.forall { m =>
       m.label == NameLabel || m.op == MatchOp.Eq || m.op == MatchOp.Ne ||
       m.matches(labels.getOrElse(Names.column(m.label).getOrElse(m.label), ""))

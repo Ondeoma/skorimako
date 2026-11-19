@@ -22,26 +22,17 @@ object Guards {
   private val safe = Set(Method.GET, Method.HEAD, Method.OPTIONS)
 
   /** 観測データの取り込み（OTLP・JSON・RUM）。 */
-  def isIngest(
-    path: String
-  ): Boolean =
+  def isIngest(path: String): Boolean =
     path.startsWith("/v1/") || path.startsWith("/rum/") || path.matches("^/api/ingest/[^/]+/_(json|multi)$") ||
       path == "/api/prom/push" || path == "/api/prom/api/v1/write"
 
-  private def originOf(
-    u: String
-  ): String = Uri.fromString(u).toOption.map(x =>
+  private def originOf(u: String): String = Uri.fromString(u).toOption.map(x =>
     s"${x.scheme.fold("")(_.value)}://${x.authority.fold("")(_.renderString)}"
   ).getOrElse(u)
 
-  def apply(
-    app: HttpRoutes[IO],
-    cfg: ApiConfig
-  ): HttpRoutes[IO] = {
+  def apply(app: HttpRoutes[IO], cfg: ApiConfig): HttpRoutes[IO] = {
     val allowed = originOf(cfg.publicUrl).toLowerCase
-    def foreign(
-      req: Request[IO]
-    ): Boolean =
+    def foreign(req: Request[IO]): Boolean =
       !safe.contains(req.method) &&
         !isIngest(req.pathInfo.renderString) &&
         req.headers.get[Authorization].isEmpty &&
@@ -61,10 +52,7 @@ object Guards {
   }
 
   /** すべての応答に付けるセキュリティのヘッダー（応答が自分で付けたものは残す）。iframe に入れさせない（クリックジャッキング）。 */
-  private def secure(
-    r: Response[IO],
-    https: Boolean
-  ): Response[IO] = {
+  private def secure(r: Response[IO], https: Boolean): Response[IO] = {
     val base = List(
       "X-Frame-Options" -> "DENY",
       "Content-Security-Policy" -> "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",

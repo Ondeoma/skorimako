@@ -23,12 +23,11 @@ import scala.concurrent.duration.*
  * （stui の POST /api/apps/notify。stui のボット「skorimako」からの DM になる）。
  * stui 側の OAUTH_CLIENTS に skorimako を登録する（redirectUri は {PUBLIC_URL}/api/integrations/stui/callback、scopes は read・write）。
  */
-final class StuiClient(
-  cfg: Option[LinkService],
-  tokens: sbirds.links.IntegrationTokenStore,
-  http: Client[IO],
-  box: SecretBox,
-  publicUrl: String) {
+final class StuiClient(cfg: Option[LinkService],
+                       tokens: sbirds.links.IntegrationTokenStore,
+                       http: Client[IO],
+                       box: SecretBox,
+                       publicUrl: String) {
 
   val Provider = "stui"
 
@@ -36,19 +35,12 @@ final class StuiClient(
 
   private def redirectUri: String = s"${publicUrl.stripSuffix("/")}/api/integrations/stui/callback"
 
-  def connected(
-    userId: UUID
-  ): IO[Boolean] = tokens.token(userId, Provider).map(_.isDefined)
+  def connected(userId: UUID): IO[Boolean] = tokens.token(userId, Provider).map(_.isDefined)
 
-  private def token(
-    userId: UUID
-  ): IO[Option[String]] = tokens.token(userId, Provider).map(_.flatMap(box.decrypt))
+  private def token(userId: UUID): IO[Option[String]] = tokens.token(userId, Provider).map(_.flatMap(box.decrypt))
 
   /** その人の stui の DM に送る。 */
-  def notify(
-    userId: UUID,
-    text: String
-  ): IO[OutboxResult] =
+  def notify(userId: UUID, text: String): IO[OutboxResult] =
     cfg match {
       case None => IO.pure(OutboxResult.Skip("stui との連携が設定されていません（STUI_URL など）"))
       case Some(c) =>
@@ -69,18 +61,12 @@ final class StuiClient(
         }
     }
 
-  private def basic(
-    c: LinkService
-  ): Authorization = Authorization(BasicCredentials(c.clientId, c.clientSecret))
+  private def basic(c: LinkService): Authorization = Authorization(BasicCredentials(c.clientId, c.clientSecret))
 
-  private def found(
-    to: String
-  ): IO[Response[IO]] = IO.pure(Response[IO](Status.Found).putHeaders(Location(Uri.unsafeFromString(to))))
+  private def found(to: String): IO[Response[IO]] =
+    IO.pure(Response[IO](Status.Found).putHeaders(Location(Uri.unsafeFromString(to))))
 
-  def routes(
-    auth: SessionAuth,
-    users: UserStore
-  ): HttpRoutes[IO] = {
+  def routes(auth: SessionAuth, users: UserStore): HttpRoutes[IO] = {
     object R extends RouteSupport {
 
       val r: HttpRoutes[IO] = HttpRoutes.of[IO] {
@@ -91,27 +77,19 @@ final class StuiClient(
           deleteIntegrationsStuiConnection(req)
       }
 
-      private def getIntegrations(
-        req: Request[IO]
-      ): IO[Response[IO]] =
+      private def getIntegrations(req: Request[IO]): IO[Response[IO]] =
         authed(req)(s =>
           cfg match {
             case None => Ok(List.empty[IntegrationDto])
             case Some(c) =>
               // 名前は sruru に登録した表示名（なければサービスの名前）
-              (connected(s.user.id), auth.appNames(req)).flatMapN(
-                (
-                  on,
-                  names
-                ) =>
-                  Ok(List(IntegrationDto(Provider, names.getOrElse(Provider, Provider), c.url, on)))
+              (connected(s.user.id), auth.appNames(req)).flatMapN((on, names) =>
+                Ok(List(IntegrationDto(Provider, names.getOrElse(Provider, Provider), c.url, on)))
               )
           }
         )
 
-      private def getIntegrationsStuiConnect(
-        req: Request[IO]
-      ): IO[Response[IO]] =
+      private def getIntegrationsStuiConnect(req: Request[IO]): IO[Response[IO]] =
         sessionOnly(req)(s =>
           cfg match {
             case None => err(ErrorCode.StuiNotConfigured)
@@ -131,9 +109,7 @@ final class StuiClient(
           }
         )
 
-      private def getIntegrationsStuiCallback(
-        req: Request[IO]
-      ): IO[Response[IO]] =
+      private def getIntegrationsStuiCallback(req: Request[IO]): IO[Response[IO]] =
         (cfg, param(req, "state")) match {
           case (Some(c), Some(state)) =>
             tokens.takeState(state, Provider).flatMap {
@@ -168,9 +144,7 @@ final class StuiClient(
           case _ => err(ErrorCode.StuiStateMissing)
         }
 
-      private def deleteIntegrationsStuiConnection(
-        req: Request[IO]
-      ): IO[Response[IO]] =
+      private def deleteIntegrationsStuiConnection(req: Request[IO]): IO[Response[IO]] =
         sessionOnly(req)(s =>
           cfg match {
             case None => NoContent()

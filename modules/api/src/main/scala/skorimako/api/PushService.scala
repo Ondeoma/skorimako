@@ -18,27 +18,20 @@ import scala.concurrent.duration.*
  * 送れなかった購読（404・410）は消す. 失敗しても呼び出し元の処理は止めない.
  * sent は送った結果（ok・gone・error）ごとに呼ぶ（自己監視の数. skorimako は自分に OTLP で送らないので、呼び出し元の Stats で数える）.
  */
-final class PushService(
-  store: PushStore,
-  http: Client[IO],
-  keys: VapidKeys,
-  subject: String,
-  sent: String => IO[Unit]) {
+final class PushService(store: PushStore,
+                        http: Client[IO],
+                        keys: VapidKeys,
+                        subject: String,
+                        sent: String => IO[Unit]) {
 
   def publicKey: String = keys.publicKey
 
-  def send(
-    userId: UUID,
-    m: PushMessage
-  ): IO[Unit] =
+  def send(userId: UUID, m: PushMessage): IO[Unit] =
     store.forUser(userId).flatMap(_.traverse_(s => deliver(s, m))).handleErrorWith(e =>
       sbirds.observe.Log.warn(s"push failed: $e")
     )
 
-  private def deliver(
-    s: Subscription,
-    m: PushMessage
-  ): IO[Unit] =
+  private def deliver(s: Subscription, m: PushMessage): IO[Unit] =
     if !WebPush.allowedEndpoint(s.endpoint) then store.remove(s.endpoint)
     else {
       val payload = Json.obj(
@@ -72,12 +65,7 @@ final class PushService(
 
 object PushService {
 
-  def create(
-    store: PushStore,
-    http: Client[IO],
-    publicUrl: String,
-    sent: String => IO[Unit]
-  ): IO[PushService] =
+  def create(store: PushStore, http: Client[IO], publicUrl: String, sent: String => IO[Unit]): IO[PushService] =
     store.vapidKeys.map { k =>
       val subject = sys.env.get("VAPID_SUBJECT").map(_.trim).filter(s =>
         s.startsWith("mailto:") || s.startsWith("https://")

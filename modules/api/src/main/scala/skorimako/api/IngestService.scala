@@ -13,13 +13,8 @@ import sbirds.shared.AppError
  * 認証は ingest（または write）スコープの APIキー（Bearer、または Basic のパスワード）。RUM はアプリのトークン。
  */
 /** 取り込みの入口（HTTP・gRPC・remote write で共通）: 変換と上限を当ててからバッファに入れる。 */
-final class IngestService(
-  ingester: Ingester,
-  transform: Transform) {
-  def ingest(
-    streamType: String,
-    batch: Batch
-  ): IO[Either[AppError, Int]] =
+final class IngestService(ingester: Ingester, transform: Transform) {
+  def ingest(streamType: String, batch: Batch): IO[Either[AppError, Int]] =
     transform(streamType, batch).flatMap {
       case Left(r) => IO.pure(Left(r))
       case Right(b) => ingester.ingest(streamType, b).map(_.left.map(AppError(ErrorCode.IngestBufferFull, _)))

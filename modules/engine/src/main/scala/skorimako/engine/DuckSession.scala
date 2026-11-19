@@ -12,8 +12,7 @@ import java.sql.{Connection, ResultSet, Statement}
  * 1回の検索のための DuckDB の接続。ストリームを同じ名前のビュー（時間の範囲で絞ったもの）として作ってから、
  * 外部のファイルへのアクセスを閉じ（キャッシュのディレクトリだけ許す）、設定を固定する。
  */
-final class DuckSession private (
-  val conn: Connection) {
+final class DuckSession private (val conn: Connection) {
   @volatile private var current: Option[Statement] = None
   @volatile private var cancelled = false
 
@@ -26,10 +25,7 @@ final class DuckSession private (
   def isCancelled: Boolean = cancelled
 
   /** SQL を実行し、limit 行まで読む。 */
-  def query(
-    sql: String,
-    limit: Int
-  ): QueryResultDto = {
+  def query(sql: String, limit: Int): QueryResultDto = {
     val t0 = System.nanoTime()
     val s = conn.createStatement()
     current = Some(s)
@@ -56,11 +52,7 @@ final class DuckSession private (
   }
 
   /** SQL を実行し、1行ずつ f に渡す（大きな結果を JSON にせずに読む）。 */
-  def scan(
-    sql: String
-  )(
-    f: ResultSet => Unit
-  ): Unit = {
+  def scan(sql: String)(f: ResultSet => Unit): Unit = {
     val s = conn.createStatement()
     current = Some(s)
     try {
@@ -79,18 +71,9 @@ final class DuckSession private (
 object DuckSession {
 
   /** 1つのストリームのビュー。files は手元のキャッシュのパス、fields は登録済みの列（ファイルがない列も null で見えるように）。 */
-  final case class View(
-    name: String,
-    files: Seq[Path],
-    fields: List[FieldDto])
+  final case class View(name: String, files: Seq[Path], fields: List[FieldDto])
 
-  def open(
-    cfg: DuckConfig,
-    views: List[View],
-    start: Long,
-    end: Long,
-    allowedDirs: List[Path]
-  ): DuckSession = {
+  def open(cfg: DuckConfig, views: List[View], start: Long, end: Long, allowedDirs: List[Path]): DuckSession = {
     val c = Duck.open(cfg, stream = true)
     try {
       val s = c.createStatement()

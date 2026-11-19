@@ -20,22 +20,19 @@ import scala.concurrent.duration.*
  * 各ノードは 30秒ごとに自分の URL（NODE_URL）を node の表に登録する。問い合わせには APP_SECRET から作る署名を付ける。
  * 返事のないノードは飛ばす（検索は止めない。そのノードの書き出す前の行が出ないだけ）。
  */
-final class PeerRoutes(
-  ingester: Ingester,
-  streams: StreamStore,
-  http: Client[IO],
-  nodeId: String,
-  nodeUrl: Option[String],
-  secret: String)
+final class PeerRoutes(ingester: Ingester,
+                       streams: StreamStore,
+                       http: Client[IO],
+                       nodeId: String,
+                       nodeUrl: Option[String],
+                       secret: String)
   extends org.http4s.dsl.Http4sDsl[IO] {
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
     case req @ GET -> Root / "internal" / "buffer" => getInternalBuffer(req)
   }
 
-  private def getInternalBuffer(
-    req: Request[IO]
-  ): IO[Response[IO]] = {
+  private def getInternalBuffer(req: Request[IO]): IO[Response[IO]] = {
     val p = (k: String) => req.params.getOrElse(k, "")
     val (t, ns, st, en, exp) = (p("type"), p("streams"), p("start"), p("end"), p("exp"))
     val fresh = exp.toLongOption.exists(e =>
@@ -53,63 +50,38 @@ final class PeerRoutes(
       }
   }
 
-  private def sign(
-    parts: String*
-  ): String = Crypto.hmacHex("skorimako-peer:" + secret, parts.mkString("|").getBytes(StandardCharsets.UTF_8))
+  private def sign(parts: String*): String =
+    Crypto.hmacHex("skorimako-peer:" + secret, parts.mkString("|").getBytes(StandardCharsets.UTF_8))
 
-  private def rowsJson(
-    m: Map[String, Vector[Row]]
-  ): String =
-    m.toList.flatMap(
-      (
-        n,
-        rows
-      ) => rows.map(r => Json.obj("s" -> Json.fromString(n), "r" -> r.toJson).noSpaces)
+  private def rowsJson(m: Map[String, Vector[Row]]): String =
+    m.toList.flatMap((n, rows) =>
+      rows.map(r => Json.obj("s" -> Json.fromString(n), "r" -> r.toJson).noSpaces)
     ).mkString("\n")
 
   /** このノードのバッファ＋ほかのノードのバッファ。 */
-  val live: LiveRows = (
-    streamType,
-    names,
-    start,
-    end
-  ) => {
+  val live: LiveRows = (streamType, names, start, end) => {
     val local = ingester.snapshot(streamType, names, start, end)
-    val remote = streams.peers(nodeId).flatMap(_.parTraverse(
-      (
-        id,
-        url
-      ) =>
-        fetch(url, streamType, names, start, end).handleErrorWith(e =>
-          IO(SelfLog.warn(s"buffer query to $id failed: ${e.getClass.getSimpleName}")).as(Map.empty[
-            String,
-            Vector[Row]
-          ])
-        )
+    val remote = streams.peers(nodeId).flatMap(_.parTraverse((id, url) =>
+      fetch(url, streamType, names, start, end).handleErrorWith(e =>
+        IO(SelfLog.warn(s"buffer query to $id failed: ${e.getClass.getSimpleName}")).as(Map.empty[
+          String,
+          Vector[Row]
+        ])
+      )
     ))
       .handleError(_ => Nil)
-    (local, remote).parMapN(
-      (
-        l,
-        rs
-      ) =>
-        (l :: rs).foldLeft(Map.empty[String, Vector[Row]])(
-          (
-            acc,
-            m
-          ) =>
-            m.foldLeft(acc) { case (a, (k, v)) => a.updated(k, a.getOrElse(k, Vector.empty) ++ v) }
-        )
+    (local, remote).parMapN((l, rs) =>
+      (l :: rs).foldLeft(Map.empty[String, Vector[Row]])((acc, m) =>
+        m.foldLeft(acc) { case (a, (k, v)) => a.updated(k, a.getOrElse(k, Vector.empty) ++ v) }
+      )
     )
   }
 
-  private def fetch(
-    base: String,
-    streamType: String,
-    names: Set[String],
-    start: Long,
-    end: Long
-  ): IO[Map[String, Vector[Row]]] = {
+  private def fetch(base: String,
+                    streamType: String,
+                    names: Set[String],
+                    start: Long,
+                    end: Long): IO[Map[String, Vector[Row]]] = {
     val ns = names.toList.sorted.mkString(",")
     val exp = (System.currentTimeMillis() / 1000 + 60).toString
     val uri = Uri.unsafeFromString(base.stripSuffix("/") + "/internal/buffer").withQueryParams(Map(

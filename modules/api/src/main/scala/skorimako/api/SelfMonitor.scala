@@ -15,13 +15,12 @@ import scala.concurrent.duration.*
  * メトリクス（skorimako_*・jvm_*・process_*）として取り込む。警告・エラーはログのストリーム skorimako に取り込む。
  * 最初に起動したノードが「skorimako 自身」のダッシュボードを作る。
  */
-final class SelfMonitor(
-  ingest: IngestService,
-  stats: Stats,
-  apps: AppStore,
-  streams: StreamStore,
-  lock: JobLock,
-  nodeId: String) {
+final class SelfMonitor(ingest: IngestService,
+                        stats: Stats,
+                        apps: AppStore,
+                        streams: StreamStore,
+                        lock: JobLock,
+                        nodeId: String) {
 
   private val base: Map[String, Value] = Map("service_name" -> Value.Str("skorimako"), "node" -> Value.Str(nodeId))
   private val LogStream = "skorimako"
@@ -48,9 +47,7 @@ final class SelfMonitor(
     "process_uptime_seconds" -> ("起動してからの秒", "s")
   )
 
-  private def metricBatch(
-    now: Long
-  ): Batch = {
+  private def metricBatch(now: Long): Batch = {
     val (counters, gauges) = stats.snapshot
     val rt = Runtime.getRuntime
     val os = ManagementFactory.getOperatingSystemMXBean
@@ -72,31 +69,15 @@ final class SelfMonitor(
     val all = counters.map { case ((n, l), v) => (n, l, v, "counter") } ++ gauges.map { case ((n, l), v) =>
       (n, l, v.toDouble, "gauge")
     } ++ jvm
-    val rows = all.groupMap(_._1)(
-      (
-        _,
-        l,
-        v,
-        t
-      ) =>
-        Row(
-          now,
-          base ++ l.map(
-            (
-              k,
-              x
-            ) => k -> Value.Str(x)
-          ) ++
-            Map("__name__" -> Value.Str("x"), "__type__" -> Value.Str(t), "value" -> Value.Dbl(v))
-        )
+    val rows = all.groupMap(_._1)((_, l, v, t) =>
+      Row(
+        now,
+        base ++ l.map((k, x) => k -> Value.Str(x)) ++
+          Map("__name__" -> Value.Str("x"), "__type__" -> Value.Str(t), "value" -> Value.Dbl(v))
+      )
     )
     Batch(
-      rows.map(
-        (
-          n,
-          rs
-        ) => n -> rs.map(r => r.copy(fields = r.fields + ("__name__" -> Value.Str(n)))).toVector
-      ),
+      rows.map((n, rs) => n -> rs.map(r => r.copy(fields = r.fields + ("__name__" -> Value.Str(n)))).toVector),
       all.map(x =>
         x._1 -> MetricMeta(
           descriptions.get(x._1).map(_._1).getOrElse(""),
@@ -157,11 +138,7 @@ final class SelfMonitor(
 object SelfMonitor {
   val DashboardName = "skorimako 自身"
 
-  private def rate(
-    metric: String,
-    by: String,
-    unit: String = ""
-  ) =
+  private def rate(metric: String, by: String, unit: String = "") =
     s"""WITH d AS (SELECT _timestamp, $by, value - lag(value) OVER (PARTITION BY node, $by ORDER BY _timestamp) AS dv FROM $metric)
        |SELECT (_timestamp // $$__interval) * $$__interval AS t, $by, sum(greatest(dv, 0)) / ($$__interval / 1e6) AS v
        |FROM d WHERE dv IS NOT NULL GROUP BY 1, 2 ORDER BY 1""".stripMargin

@@ -21,18 +21,13 @@ object IngestRoutes {
    * OTLP の応答（protobuf なら空のメッセージ＝本文 0 バイト、JSON なら {}）。
    * 本文に Array[Byte] を渡すと circe の EntityEncoder で JSON の配列 [] になり、Collector が protobuf として読めないので、本文は付けない.
    */
-  def otlpOk(
-    json: Boolean
-  ): IO[Response[IO]] =
+  def otlpOk(json: Boolean): IO[Response[IO]] =
     if json then IO.pure(Response[IO](Status.Ok).withEntity(Json.obj()))
     else IO.pure(Response[IO](Status.Ok).withContentType(`Content-Type`(Protobuf)))
 }
 
-final class IngestRoutes(
-  ingest: IngestService,
-  apps: AppStore,
-  val sessions: SessionAuth,
-  cfg: ApiConfig) extends RouteSupport {
+final class IngestRoutes(ingest: IngestService, apps: AppStore, val sessions: SessionAuth, cfg: ApiConfig)
+  extends RouteSupport {
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
     case req @ POST -> Root / "v1" / "logs" => postV1Logs(req)
@@ -44,47 +39,16 @@ final class IngestRoutes(
     case req @ POST -> Root / "rum" / "v1" / token => postRumV1(req, token)
   }
 
-  private def postV1Logs(
-    req: Request[IO]
-  ): IO[Response[IO]] =
-    otlp(req, StreamType.Logs)(
-      (
-        b,
-        j,
-        s,
-        now
-      ) => Otlp.logs(b, j, s, now)
-    )
+  private def postV1Logs(req: Request[IO]): IO[Response[IO]] =
+    otlp(req, StreamType.Logs)((b, j, s, now) => Otlp.logs(b, j, s, now))
 
-  private def postV1Traces(
-    req: Request[IO]
-  ): IO[Response[IO]] =
-    otlp(req, StreamType.Traces)(
-      (
-        b,
-        j,
-        s,
-        now
-      ) => Otlp.traces(b, j, s, now)
-    )
+  private def postV1Traces(req: Request[IO]): IO[Response[IO]] =
+    otlp(req, StreamType.Traces)((b, j, s, now) => Otlp.traces(b, j, s, now))
 
-  private def postV1Metrics(
-    req: Request[IO]
-  ): IO[Response[IO]] =
-    otlp(req, StreamType.Metrics)(
-      (
-        b,
-        j,
-        _,
-        now
-      ) => Otlp.metrics(b, j, now)
-    )
+  private def postV1Metrics(req: Request[IO]): IO[Response[IO]] =
+    otlp(req, StreamType.Metrics)((b, j, _, now) => Otlp.metrics(b, j, now))
 
-  private def postIngest(
-    req: Request[IO],
-    name: String,
-    kind: String
-  ): IO[Response[IO]] =
+  private def postIngest(req: Request[IO], name: String, kind: String): IO[Response[IO]] =
     ingestAuth(req) { _ =>
       Names.stream(name) match {
         case Left(e) => err(ErrorCode.IngestPayloadInvalid, e)
@@ -113,15 +77,10 @@ final class IngestRoutes(
       }
     }
 
-  private def optionsRumV1(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def optionsRumV1(req: Request[IO]): IO[Response[IO]] =
     IO.pure(Response[IO](Status.NoContent).putHeaders(cors(req.headers.get(CIString("Origin")).map(_.head.value))*))
 
-  private def postRumV1(
-    req: Request[IO],
-    token: String
-  ): IO[Response[IO]] = {
+  private def postRumV1(req: Request[IO], token: String): IO[Response[IO]] = {
     val origin = req.headers.get(CIString("Origin")).map(_.head.value)
     apps.rumApp(token).flatMap {
       case None => err(ErrorCode.RumAppNotFound)
@@ -146,9 +105,7 @@ final class IngestRoutes(
   }
 
   /** 本文（gzip・deflate なら展開する。展開後の大きさにも上限）。 */
-  def bytes(
-    req: Request[IO]
-  ): IO[Either[String, Array[Byte]]] =
+  def bytes(req: Request[IO]): IO[Either[String, Array[Byte]]] =
     req.body.compile.to(Array).flatMap { raw =>
       val enc = req.headers.get(CIString("Content-Encoding")).map(_.head.value.trim.toLowerCase).getOrElse("")
       if enc.isEmpty || enc == "identity" then IO.pure(Right(raw))
@@ -167,24 +124,16 @@ final class IngestRoutes(
         }.handleError(_ => Left("圧縮された本文を展開できません"))
     }
 
-  private def isJson(
-    req: Request[IO]
-  ): Boolean =
+  private def isJson(req: Request[IO]): Boolean =
     req.contentType.exists(ct => ct.mediaType.subType.contains("json"))
 
-  private def streamName(
-    req: Request[IO]
-  ): Either[String, String] =
+  private def streamName(req: Request[IO]): Either[String, String] =
     Names.stream(req.headers.get(
       CIString("stream-name")
     ).orElse(req.headers.get(CIString("X-Skorimako-Stream"))).map(_.head.value).getOrElse("default"))
 
   /** 取り込める人だけ。 */
-  private def ingestAuth(
-    req: Request[IO]
-  )(
-    f: AuthSession => IO[Response[IO]]
-  ): IO[Response[IO]] =
+  private def ingestAuth(req: Request[IO])(f: AuthSession => IO[Response[IO]]): IO[Response[IO]] =
     sessions.fromRequest(req).flatMap {
       case None => err(ErrorCode.IngestApiKeyRequired)
       case Some(s) if !s.canIngest => err(ErrorCode.IngestScopeRequired)
@@ -192,12 +141,7 @@ final class IngestRoutes(
     }
 
   /** 行をためる。たまりすぎていたら 503（送り手が再送する）。 */
-  private def accept(
-    streamType: String,
-    batch: Batch
-  )(
-    ok: Int => IO[Response[IO]]
-  ): IO[Response[IO]] =
+  private def accept(streamType: String, batch: Batch)(ok: Int => IO[Response[IO]]): IO[Response[IO]] =
     ingest.ingest(streamType, batch).flatMap {
       case Right(n) => ok(n)
       case Left(r) =>
@@ -206,10 +150,7 @@ final class IngestRoutes(
 
   private def otlp(
     req: Request[IO],
-    streamType: String
-  )(
-    parse: (Array[Byte], Boolean, String, Long) => Either[String, Batch]
-  ): IO[Response[IO]] =
+    streamType: String)(parse: (Array[Byte], Boolean, String, Long) => Either[String, Batch]): IO[Response[IO]] =
     ingestAuth(req) { _ =>
       streamName(req) match {
         case Left(e) => err(ErrorCode.IngestPayloadInvalid, e)
@@ -226,9 +167,7 @@ final class IngestRoutes(
       }
     }
 
-  private def cors(
-    origin: Option[String]
-  ): List[Header.ToRaw] =
+  private def cors(origin: Option[String]): List[Header.ToRaw] =
     List[Header.ToRaw](
       "Access-Control-Allow-Origin" -> origin.getOrElse("*"),
       "Access-Control-Allow-Methods" -> "POST, OPTIONS",
@@ -237,10 +176,7 @@ final class IngestRoutes(
       "Vary" -> "Origin"
     )
 
-  private def originAllowed(
-    app: RumAppDto,
-    origin: Option[String]
-  ): Boolean =
+  private def originAllowed(app: RumAppDto, origin: Option[String]): Boolean =
     app.origins.isEmpty || app.origins.contains("*") ||
       origin.exists(o => app.origins.exists(_.stripSuffix("/").equalsIgnoreCase(o)))
 

@@ -9,22 +9,16 @@ import SqlText.Token
 object Prune {
 
   /** 列 → 取りうる値。 */
-  def constraints(
-    where: Option[String]
-  ): Map[String, Set[String]] =
+  def constraints(where: Option[String]): Map[String, Set[String]] =
     where.map(_.trim).filter(_.nonEmpty).flatMap(w => SqlText.tokenize(w).toOption).map(fromTokens).getOrElse(Map.empty)
 
-  private def name(
-    t: Token
-  ): Option[String] = t match {
+  private def name(t: Token): Option[String] = t match {
     case Token.Word(w) => Some(w.toLowerCase)
     case Token.Quoted(q) => Some(q)
     case _ => None
   }
 
-  def fromTokens(
-    ts: List[Token]
-  ): Map[String, Set[String]] = {
+  def fromTokens(ts: List[Token]): Map[String, Set[String]] = {
     // 一番外側の括弧を外す
     val inner = ts match {
       case Token.Sym("(") :: rest if rest.lastOption.contains(Token.Sym(")")) && balancedInside(rest.init) => rest.init
@@ -60,9 +54,7 @@ object Prune {
       }.groupMapReduce(_._1)(_._2)(_ intersect _)
   }
 
-  private def balancedInside(
-    ts: List[Token]
-  ): Boolean = {
+  private def balancedInside(ts: List[Token]): Boolean = {
     var d = 0
     ts.forall {
       case Token.Sym("(") => d += 1; true
@@ -72,22 +64,11 @@ object Prune {
   }
 
   /** ファイルを読む必要があるか（tags にその列があり、どの値も含まなければ読まない）。 */
-  def keep(
-    tags: Map[String, List[String]],
-    cs: Map[String, Set[String]]
-  ): Boolean =
-    cs.forall(
-      (
-        col,
-        vs
-      ) => tags.get(col).forall(have => have.exists(vs.contains))
-    )
+  def keep(tags: Map[String, List[String]], cs: Map[String, Set[String]]): Boolean =
+    cs.forall((col, vs) => tags.get(col).forall(have => have.exists(vs.contains)))
 
   /** ファイルに記録する値の一覧（文字列の列ごとに、種類が max 以下で値が短いものだけ）。 */
-  def tags(
-    rows: Iterable[Row],
-    max: Int = 32
-  ): Map[String, List[String]] = {
+  def tags(rows: Iterable[Row], max: Int = 32): Map[String, List[String]] = {
     val acc = scala.collection.mutable.Map.empty[String, scala.collection.mutable.Set[String]]
     val dead = scala.collection.mutable.Set.empty[String]
     rows.foreach(_.fields.foreach {
@@ -104,10 +85,7 @@ object Prune {
   }
 
   /** 圧縮でまとめたファイルの値の一覧（すべてのファイルにあり、合わせても max 以下の列だけ）。 */
-  def mergeTags(
-    ts: List[Map[String, List[String]]],
-    max: Int = 32
-  ): Map[String, List[String]] =
+  def mergeTags(ts: List[Map[String, List[String]]], max: Int = 32): Map[String, List[String]] =
     if ts.isEmpty then Map.empty
     else
       ts.map(_.keySet).reduce(_ intersect _).toList.flatMap { k =>

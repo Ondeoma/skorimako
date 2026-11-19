@@ -11,9 +11,7 @@ import scala.collection.mutable
  */
 object PromWrite {
 
-  def decompress(
-    body: Array[Byte]
-  ): Either[String, Array[Byte]] =
+  def decompress(body: Array[Byte]): Either[String, Array[Byte]] =
     scala.util.Try {
       val len = io.airlift.compress.snappy.SnappyDecompressor.getUncompressedLength(body, 0)
       if len > 256 * 1024 * 1024 then throw new IllegalArgumentException("too large")
@@ -22,9 +20,7 @@ object PromWrite {
       if n == len then out else java.util.Arrays.copyOf(out, n)
     }.toEither.left.map(_ => "snappy で展開できません")
 
-  private def readLabel(
-    in: CodedInputStream
-  ): (String, String) = {
+  private def readLabel(in: CodedInputStream): (String, String) = {
     var n = ""; var v = ""
     while !in.isAtEnd do {
       val tag = in.readTag()
@@ -37,9 +33,7 @@ object PromWrite {
     (n, v)
   }
 
-  private def readSample(
-    in: CodedInputStream
-  ): (Double, Long) = {
+  private def readSample(in: CodedInputStream): (Double, Long) = {
     var v = 0.0; var t = 0L
     while !in.isAtEnd do {
       val tag = in.readTag()
@@ -52,19 +46,12 @@ object PromWrite {
     (v, t)
   }
 
-  private def sub[A](
-    in: CodedInputStream
-  )(
-    f: CodedInputStream => A
-  ): A = {
+  private def sub[A](in: CodedInputStream)(f: CodedInputStream => A): A = {
     val bytes = in.readBytes()
     f(bytes.newCodedInput())
   }
 
-  def parse(
-    raw: Array[Byte],
-    nowMicros: Long
-  ): Either[String, Batch] =
+  def parse(raw: Array[Byte], nowMicros: Long): Either[String, Batch] =
     scala.util.Try {
       val in = CodedInputStream.newInstance(raw)
       in.setSizeLimit(Int.MaxValue)
@@ -86,18 +73,11 @@ object PromWrite {
                 }
               }
               labels.find(_._1 == "__name__").flatMap(l => Names.metric(l._2)).foreach { name =>
-                val fields = labels.filter(_._1 != "__name__").flatMap(
-                  (
-                    k,
-                    v
-                  ) => Names.column(k).map(_ -> Value.Str(v))
-                ).toMap
+                val fields =
+                  labels.filter(_._1 != "__name__").flatMap((k, v) => Names.column(k).map(_ -> Value.Str(v))).toMap
                 val buf = rows.getOrElseUpdate(name, mutable.ArrayBuffer.empty)
                 samples.foreach {
-                  (
-                    v,
-                    t
-                  ) =>
+                  (v, t) =>
                     buf += Row(
                       if t > 0 then t * 1000 else nowMicros,
                       fields ++ Map(

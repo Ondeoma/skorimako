@@ -12,14 +12,9 @@ object PromQL {
     case Eq, Ne, Re, Nre
   }
 
-  final case class Matcher(
-    label: String,
-    op: MatchOp,
-    value: String) {
+  final case class Matcher(label: String, op: MatchOp, value: String) {
     private lazy val re = value.r
-    def matches(
-      v: String
-    ): Boolean = op match {
+    def matches(v: String): Boolean = op match {
       case MatchOp.Eq => v == value
       case MatchOp.Ne => v != value
       case MatchOp.Re => re.matches(v)
@@ -27,11 +22,7 @@ object PromQL {
     }
   }
 
-  final case class VectorMatching(
-    on: Boolean,
-    labels: List[String],
-    group: Option[String],
-    include: List[String])
+  final case class VectorMatching(on: Boolean, labels: List[String], group: Option[String], include: List[String])
 
   enum Expr {
     case Num(
@@ -42,7 +33,8 @@ object PromQL {
       name: Option[String],
       matchers: List[Matcher],
       range: Option[Long],
-      offset: Long) // range・offset はミリ秒
+      offset: Long
+    ) // range・offset はミリ秒
     case Call(
       fn: String,
       args: List[Expr])
@@ -119,9 +111,7 @@ object PromQL {
   }
 
   /** 期間（5m・1h30m・10s・250ms・1d・1w・1y）をミリ秒に。 */
-  def duration(
-    s: String
-  ): Either[String, Long] = {
+  def duration(s: String): Either[String, Long] = {
     val re = "(\\d+)(ms|s|m|h|d|w|y)".r
     val parts = re.findAllMatchIn(s).toList
     if parts.isEmpty || parts.map(_.matched).mkString != s then Left(s"期間 $s が読めません（例: 5m・1h）")
@@ -156,16 +146,12 @@ object PromQL {
     case End
   }
 
-  private def lex(
-    src: String
-  ): Either[String, Vector[Tok]] = {
+  private def lex(src: String): Either[String, Vector[Tok]] = {
     val out = Vector.newBuilder[Tok]
     var i = 0
     val n = src.length
     var err: Option[String] = None
-    def peek(
-      k: Int = 0
-    ) = if i + k < n then src(i + k) else '\u0000'
+    def peek(k: Int = 0) = if i + k < n then src(i + k) else '\u0000'
     while i < n && err.isEmpty do {
       val c = src(i)
       if c.isWhitespace then i += 1
@@ -231,23 +217,16 @@ object PromQL {
 
   // ---------------------------------------------------------------- 構文
 
-  private final class Parser(
-    ts: Vector[Tok]) {
+  private final class Parser(ts: Vector[Tok]) {
     var p = 0
     def peek: Tok = ts(p)
     def next(): Tok = { val t = ts(p); p += 1; t }
-    def isOp(
-      s: String
-    ): Boolean = peek == Tok.Op(s)
-    def isWord(
-      s: String
-    ): Boolean = peek match {
+    def isOp(s: String): Boolean = peek == Tok.Op(s)
+    def isWord(s: String): Boolean = peek match {
       case Tok.Ident(w) => w.equalsIgnoreCase(s)
       case _ => false
     }
-    def expect(
-      s: String
-    ): Unit = if isOp(s) then p += 1 else throw new IllegalArgumentException(s"$s がありません")
+    def expect(s: String): Unit = if isOp(s) then p += 1 else throw new IllegalArgumentException(s"$s がありません")
 
     private val precedence: List[Set[String]] =
       List(
@@ -265,9 +244,7 @@ object PromQL {
       case _ => None
     }
 
-    def parse(
-      level: Int = 0
-    ): Expr =
+    def parse(level: Int = 0): Expr =
       if level >= precedence.size then unary()
       else {
         var lhs = parse(level + 1)
@@ -318,9 +295,7 @@ object PromQL {
       else if isOp("+") then { p += 1; unary() }
       else postfix(primary())
 
-    def postfix(
-      e0: Expr
-    ): Expr = {
+    def postfix(e0: Expr): Expr = {
       var e = e0
       var go = true
       while go do
@@ -421,9 +396,7 @@ object PromQL {
     }
   }
 
-  def parse(
-    src: String
-  ): Either[String, Expr] =
+  def parse(src: String): Either[String, Expr] =
     lex(src).flatMap { ts =>
       scala.util.Try {
         val ps = new Parser(ts)
@@ -434,9 +407,7 @@ object PromQL {
     }
 
   /** 式の中のセレクター（データを読む対象）。 */
-  def selectors(
-    e: Expr
-  ): List[Expr.Selector] = e match {
+  def selectors(e: Expr): List[Expr.Selector] = e match {
     case s: Expr.Selector => List(s)
     case Expr.Call(_, as) => as.flatMap(selectors)
     case Expr.Agg(_, p, x, _, _) => p.toList.flatMap(selectors) ++ selectors(x)
@@ -448,9 +419,7 @@ object PromQL {
   }
 
   /** 式が必要とする過去の長さ（範囲 + offset + サブクエリ）。 */
-  def lookback(
-    e: Expr
-  ): Long = e match {
+  def lookback(e: Expr): Long = e match {
     case s: Expr.Selector => s.range.getOrElse(0L) + math.max(0L, s.offset)
     case Expr.Call(_, as) => as.map(lookback).maxOption.getOrElse(0L)
     case Expr.Agg(_, _, x, _, _) => lookback(x)

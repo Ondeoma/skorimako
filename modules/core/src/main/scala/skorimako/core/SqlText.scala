@@ -3,38 +3,34 @@ package skorimako.core
 /** SQL の文字列の扱い（引用・字句の分解・利用者が書いた SQL の検査）。 */
 object SqlText {
 
-  def ident(
-    name: String
-  ): String = "\"" + name.replace("\"", "\"\"") + "\""
+  def ident(name: String): String = "\"" + name.replace("\"", "\"\"") + "\""
 
-  def lit(
-    s: String
-  ): String = "'" + s.replace("'", "''") + "'"
+  def lit(s: String): String = "'" + s.replace("'", "''") + "'"
 
   enum Token {
     case Word(
-      text: String) // 予約語・関数名・引用していない名前
+      text: String
+    ) // 予約語・関数名・引用していない名前
     case Quoted(
-      text: String) // "名前"
+      text: String
+    ) // "名前"
     case Str(
-      text: String) // '文字列'
+      text: String
+    ) // '文字列'
     case Num(
       text: String)
     case Sym(
-      text: String) // 記号（( ) , ; など）
+      text: String
+    ) // 記号（( ) , ; など）
   }
 
   /** 字句に分ける（コメントは捨てる）。閉じていない引用・コメントは Left。 */
-  def tokenize(
-    sql: String
-  ): Either[String, List[Token]] = {
+  def tokenize(sql: String): Either[String, List[Token]] = {
     val out = List.newBuilder[Token]
     var i = 0
     val n = sql.length
     var err: Option[String] = None
-    def quoted(
-      q: Char
-    ): Option[String] = {
+    def quoted(q: Char): Option[String] = {
       val b = new StringBuilder
       var j = i + 1
       var done = false
@@ -81,9 +77,7 @@ object SqlText {
   }
 
   /** 括弧の対応と、文の区切り（;）がないことを確かめる。 */
-  private def balanced(
-    ts: List[Token]
-  ): Either[String, Unit] = {
+  private def balanced(ts: List[Token]): Either[String, Unit] = {
     var depth = 0
     var bad: Option[String] = None
     ts.foreach {
@@ -98,9 +92,7 @@ object SqlText {
   }
 
   /** 検索の SQL（SELECT・WITH・FROM で始まる1つの文）。末尾の ; は取り除く。参照している名前（引用の有無を問わない）を返す。 */
-  def checkQuery(
-    sql: String
-  ): Either[String, (String, Set[String])] = {
+  def checkQuery(sql: String): Either[String, (String, Set[String])] = {
     val s = sql.trim.stripSuffix(";").trim
     for {
       _ <- Either.cond(s.nonEmpty, (), "SQL を入力してください")
@@ -115,9 +107,7 @@ object SqlText {
   }
 
   /** 条件の式（WHERE に入れる）。; と、外側の括弧を閉じることを禁じる。 */
-  def checkCondition(
-    expr: String
-  ): Either[String, String] = {
+  def checkCondition(expr: String): Either[String, String] = {
     val s = expr.trim
     for {
       _ <- Either.cond(s.length <= 20000, (), "条件が長すぎます")
@@ -126,9 +116,7 @@ object SqlText {
     } yield s
   }
 
-  def names(
-    ts: List[Token]
-  ): Set[String] = ts.collect {
+  def names(ts: List[Token]): Set[String] = ts.collect {
     case Token.Word(w) => w.toLowerCase
     case Token.Quoted(q) => q
   }.toSet

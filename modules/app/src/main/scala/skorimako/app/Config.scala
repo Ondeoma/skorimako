@@ -13,18 +13,10 @@ import scala.concurrent.duration.*
 
 /** 設定は環境変数から読む。 */
 object Config {
-  private def opt(
-    name: String
-  ): Option[String] = sys.env.get(name).map(_.trim).filter(_.nonEmpty)
-  private def int(
-    name: String
-  ): Option[Int] = opt(name).flatMap(_.toIntOption)
-  private def enabled(
-    name: String
-  ): Boolean = opt(name).exists(_.equalsIgnoreCase("true"))
-  private def required(
-    name: String
-  ): Either[String, String] = opt(name).toRight(s"環境変数 $name を設定してください")
+  private def opt(name: String): Option[String] = sys.env.get(name).map(_.trim).filter(_.nonEmpty)
+  private def int(name: String): Option[Int] = opt(name).flatMap(_.toIntOption)
+  private def enabled(name: String): Boolean = opt(name).exists(_.equalsIgnoreCase("true"))
+  private def required(name: String): Either[String, String] = opt(name).toRight(s"環境変数 $name を設定してください")
 
   /** OAUTH_CLIENTS: [{"id":"stui","secret":"…","redirectUri":"https://…/callback","name":"stui","scopes":["read"]}] */
   private def oauthClients: Either[String, List[OAuthClient]] =
@@ -34,29 +26,20 @@ object Config {
       ).flatMap(_.traverse { j =>
         val c = j.hcursor
         (c.get[String]("id"), c.get[String]("secret"), c.get[String]("redirectUri")).tupled.toOption
-          .filter(
-            (
-              id,
-              sec,
-              uri
-            ) => id.nonEmpty && sec.length >= 16 && (uri.startsWith("https://") || uri.startsWith("http://localhost"))
+          .filter((id, sec, uri) =>
+            id.nonEmpty && sec.length >= 16 && (uri.startsWith("https://") || uri.startsWith("http://localhost"))
           )
-          .map(
-            (
+          .map((id, sec, uri) =>
+            OAuthClient(
               id,
               sec,
-              uri
-            ) =>
-              OAuthClient(
-                id,
-                sec,
-                uri,
-                c.get[String]("name").getOrElse(id),
-                c.get[List[String]]("scopes").toOption.map(_.filter(Set(
-                  "read",
-                  "write"
-                ))).filter(_.nonEmpty).getOrElse(List("read"))
-              )
+              uri,
+              c.get[String]("name").getOrElse(id),
+              c.get[List[String]]("scopes").toOption.map(_.filter(Set(
+                "read",
+                "write"
+              ))).filter(_.nonEmpty).getOrElse(List("read"))
+            )
           )
           .toRight("OAUTH_CLIENTS の各要素には id・secret（16文字以上）・redirectUri（https://）を指定してください")
       })
@@ -121,13 +104,8 @@ object Config {
           webhookDenyPrivate = enabled("WEBHOOK_DENY_PRIVATE"),
           oauthClients = clients,
           // STUI_URL・STUI_CLIENT_ID・STUI_CLIENT_SECRET（STUI_INTERNAL_URL はサーバーから呼ぶ URL）
-          stui = (opt("STUI_URL"), opt("STUI_CLIENT_ID"), opt("STUI_CLIENT_SECRET")).mapN(
-            (
-              u,
-              id,
-              sec
-            ) =>
-              LinkService("stui", u.stripSuffix("/"), id, sec, opt("STUI_INTERNAL_URL").map(_.stripSuffix("/")))
+          stui = (opt("STUI_URL"), opt("STUI_CLIENT_ID"), opt("STUI_CLIENT_SECRET")).mapN((u, id, sec) =>
+            LinkService("stui", u.stripSuffix("/"), id, sec, opt("STUI_INTERNAL_URL").map(_.stripSuffix("/")))
           ),
           internalSecret = secret,
           grpcPort = int("GRPC_PORT").getOrElse(4317)

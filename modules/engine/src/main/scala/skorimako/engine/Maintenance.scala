@@ -21,15 +21,14 @@ final case class MaintenanceConfig(
  * 保守: 小さいファイルの圧縮（同じストリーム・同じ時間のものを1つに）、保持期間を過ぎたファイルの削除、削除の印の付いたファイルの片付け。
  * どれも job_lock で1ノードだけが行う。
  */
-final class Maintenance(
-  store: StreamStore,
-  objects: ObjectStore,
-  engine: QueryEngine,
-  duck: DuckConfig,
-  cfg: MaintenanceConfig,
-  lock: JobLock,
-  nodeId: String,
-  tmpDir: Path) {
+final class Maintenance(store: StreamStore,
+                        objects: ObjectStore,
+                        engine: QueryEngine,
+                        duck: DuckConfig,
+                        cfg: MaintenanceConfig,
+                        lock: JobLock,
+                        nodeId: String,
+                        tmpDir: Path) {
 
   /** 圧縮を1回。まとめたファイルの数。 */
   def compact: IO[Int] =
@@ -39,9 +38,7 @@ final class Maintenance(
       50
     ).flatMap(_.traverse(compactGroup).map(_.sum))
 
-  private def compactGroup(
-    group: List[FileRow]
-  ): IO[Int] =
+  private def compactGroup(group: List[FileRow]): IO[Int] =
     store.byId(group.head.streamId).flatMap {
       case None => IO.pure(0)
       case Some(st) =>
@@ -82,9 +79,7 @@ final class Maintenance(
         }
     }
 
-  private def deleteTree(
-    p: Path
-  ): Unit =
+  private def deleteTree(p: Path): Unit =
     if Files.exists(p) then
       Files.walk(p).sorted(java.util.Comparator.reverseOrder()).forEach(x => Files.deleteIfExists(x))
 
@@ -98,11 +93,8 @@ final class Maintenance(
 
   def deleteMarked: IO[Int] =
     store.deletedFiles(cfg.deleteGraceSeconds, 1000).flatMap { fs =>
-      fs.parTraverseN(8)(
-        (
-          id,
-          key
-        ) => (objects.delete(key) *> engine.forgetCached(key)).attempt.map(r => Option.when(r.isRight)(id))
+      fs.parTraverseN(8)((id, key) =>
+        (objects.delete(key) *> engine.forgetCached(key)).attempt.map(r => Option.when(r.isRight)(id))
       )
         .flatMap(ids => store.forget(ids.flatten).as(ids.flatten.size))
     }
@@ -116,14 +108,10 @@ final class Maintenance(
 
   def retentionLoop: IO[Nothing] =
     Periodic.run(5.minutes, 30.minutes, ErrorCode.RetentionFailed)(
-      lock.exclusive("retention", 25.minutes)(expireAndDelete.flatMap(
-        (
-          e,
-          d
-        ) =>
-          IO.whenA(
-            e + d > 0
-          )(sbirds.observe.Log.println(s"[skorimako] retention: expired $e file(s), deleted $d object(s)"))
+      lock.exclusive("retention", 25.minutes)(expireAndDelete.flatMap((e, d) =>
+        IO.whenA(
+          e + d > 0
+        )(sbirds.observe.Log.println(s"[skorimako] retention: expired $e file(s), deleted $d object(s)"))
       ))
     )
 

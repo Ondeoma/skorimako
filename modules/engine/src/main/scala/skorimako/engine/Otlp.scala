@@ -16,19 +16,12 @@ import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
 /** メトリクスの説明（ストリームに記録する）。 */
-final case class MetricMeta(
-  description: String,
-  unit: String,
-  metricType: String)
+final case class MetricMeta(description: String, unit: String, metricType: String)
 
 /** 取り込む内容: ストリーム名ごとの行。メトリクスは説明も。 */
-final case class Batch(
-  rows: Map[String, Vector[Row]],
-  meta: Map[String, MetricMeta] = Map.empty) {
+final case class Batch(rows: Map[String, Vector[Row]], meta: Map[String, MetricMeta] = Map.empty) {
   def size: Int = rows.values.map(_.size).sum
-  def ++(
-    o: Batch
-  ): Batch =
+  def ++(o: Batch): Batch =
     Batch(
       (rows.keySet ++ o.rows.keySet).map(k =>
         k -> (rows.getOrElse(k, Vector.empty) ++ o.rows.getOrElse(k, Vector.empty))
@@ -48,9 +41,7 @@ object Otlp {
   // ---------------------------------------------------------------- 読み込み
 
   /** OTLP/JSON は traceId・spanId を16進数で書く（protobuf の JSON 表現は base64）ので、読む前に直す。 */
-  private def fixIds(
-    j: Json
-  ): Json =
+  private def fixIds(j: Json): Json =
     j.arrayOrObject(
       j,
       a => Json.fromValues(a.map(fixIds)),
@@ -63,10 +54,7 @@ object Otlp {
         })
     )
 
-  private def parseJson[B <: Message.Builder](
-    body: Array[Byte],
-    b: B
-  ): Either[String, B] =
+  private def parseJson[B <: Message.Builder](body: Array[Byte], b: B): Either[String, B] =
     io.circe.parser.parse(new String(body, java.nio.charset.StandardCharsets.UTF_8)).left.map(e =>
       s"JSON として読めません: ${e.message}"
     )
@@ -75,31 +63,17 @@ object Otlp {
           .left.map(e => s"OTLP の JSON として読めません: ${Option(e.getMessage).getOrElse("").take(200)}").map(_ => b)
       )
 
-  def logs(
-    body: Array[Byte],
-    json: Boolean,
-    stream: String,
-    nowMicros: Long
-  ): Either[String, Batch] =
+  def logs(body: Array[Byte], json: Boolean, stream: String, nowMicros: Long): Either[String, Batch] =
     (if json then parseJson(body, ExportLogsServiceRequest.newBuilder()).map(_.build())
      else scala.util.Try(ExportLogsServiceRequest.parseFrom(body)).toEither.left.map(_ => "OTLP の protobuf として読めません"))
       .map(r => Batch(Map(stream -> logRows(r, nowMicros))))
 
-  def traces(
-    body: Array[Byte],
-    json: Boolean,
-    stream: String,
-    nowMicros: Long
-  ): Either[String, Batch] =
+  def traces(body: Array[Byte], json: Boolean, stream: String, nowMicros: Long): Either[String, Batch] =
     (if json then parseJson(body, ExportTraceServiceRequest.newBuilder()).map(_.build())
      else scala.util.Try(ExportTraceServiceRequest.parseFrom(body)).toEither.left.map(_ => "OTLP の protobuf として読めません"))
       .map(r => Batch(Map(stream -> spanRows(r, nowMicros))))
 
-  def metrics(
-    body: Array[Byte],
-    json: Boolean,
-    nowMicros: Long
-  ): Either[String, Batch] =
+  def metrics(body: Array[Byte], json: Boolean, nowMicros: Long): Either[String, Batch] =
     (if json then parseJson(body, ExportMetricsServiceRequest.newBuilder()).map(_.build())
      else
        scala.util.Try(ExportMetricsServiceRequest.parseFrom(body)).toEither.left.map(_ => "OTLP の protobuf として読めません")
@@ -107,30 +81,17 @@ object Otlp {
       .map(r => metricRows(r, nowMicros))
 
   /** 解釈済みの要求から（gRPC）。 */
-  def logsOf(
-    r: ExportLogsServiceRequest,
-    stream: String,
-    nowMicros: Long
-  ): Batch = Batch(Map(stream -> logRows(r, nowMicros)))
-  def tracesOf(
-    r: ExportTraceServiceRequest,
-    stream: String,
-    nowMicros: Long
-  ): Batch = Batch(Map(stream -> spanRows(r, nowMicros)))
-  def metricsOf(
-    r: ExportMetricsServiceRequest,
-    nowMicros: Long
-  ): Batch = metricRows(r, nowMicros)
+  def logsOf(r: ExportLogsServiceRequest, stream: String, nowMicros: Long): Batch =
+    Batch(Map(stream -> logRows(r, nowMicros)))
+  def tracesOf(r: ExportTraceServiceRequest, stream: String, nowMicros: Long): Batch =
+    Batch(Map(stream -> spanRows(r, nowMicros)))
+  def metricsOf(r: ExportMetricsServiceRequest, nowMicros: Long): Batch = metricRows(r, nowMicros)
 
   // ---------------------------------------------------------------- 属性
 
-  private def idHex(
-    b: ByteString
-  ): String = if b.isEmpty then "" else hex.formatHex(b.toByteArray)
+  private def idHex(b: ByteString): String = if b.isEmpty then "" else hex.formatHex(b.toByteArray)
 
-  private def anyJson(
-    v: AnyValue
-  ): Json = v.getValueCase match {
+  private def anyJson(v: AnyValue): Json = v.getValueCase match {
     case AnyValue.ValueCase.STRING_VALUE => Json.fromString(v.getStringValue)
     case AnyValue.ValueCase.BOOL_VALUE => Json.fromBoolean(v.getBoolValue)
     case AnyValue.ValueCase.INT_VALUE => Json.fromLong(v.getIntValue)
@@ -144,11 +105,7 @@ object Otlp {
   }
 
   /** 属性を列に足す（入れ子の kvlist は prefix_key、配列は JSON の文字列）。 */
-  private def addAttrs(
-    out: mutable.Map[String, Value],
-    kvs: java.util.List[KeyValue],
-    prefix: String = ""
-  ): Unit =
+  private def addAttrs(out: mutable.Map[String, Value], kvs: java.util.List[KeyValue], prefix: String = ""): Unit =
     kvs.asScala.foreach { kv =>
       Names.column(prefix + kv.getKey).foreach { name =>
         val v = kv.getValue
@@ -164,10 +121,7 @@ object Otlp {
       }
     }
 
-  private def micros(
-    nanos: Long,
-    fallback: Long
-  ): Long = if nanos > 0 then nanos / 1000 else fallback
+  private def micros(nanos: Long, fallback: Long): Long = if nanos > 0 then nanos / 1000 else fallback
 
   private val severityNames = Vector(
     "",
@@ -199,10 +153,7 @@ object Otlp {
 
   // ---------------------------------------------------------------- ログ
 
-  private def logRows(
-    r: ExportLogsServiceRequest,
-    now: Long
-  ): Vector[Row] = {
+  private def logRows(r: ExportLogsServiceRequest, now: Long): Vector[Row] = {
     val out = Vector.newBuilder[Row]
     r.getResourceLogsList.asScala.foreach { rl =>
       val res = mutable.LinkedHashMap.empty[String, Value]
@@ -238,9 +189,7 @@ object Otlp {
 
   // ---------------------------------------------------------------- トレース
 
-  private def kindName(
-    s: Span
-  ): String = s.getKind match {
+  private def kindName(s: Span): String = s.getKind match {
     case Span.SpanKind.SPAN_KIND_INTERNAL => "INTERNAL"
     case Span.SpanKind.SPAN_KIND_SERVER => "SERVER"
     case Span.SpanKind.SPAN_KIND_CLIENT => "CLIENT"
@@ -249,18 +198,13 @@ object Otlp {
     case _ => "UNSPECIFIED"
   }
 
-  private def statusName(
-    s: Status
-  ): String = s.getCode match {
+  private def statusName(s: Status): String = s.getCode match {
     case Status.StatusCode.STATUS_CODE_OK => "OK"
     case Status.StatusCode.STATUS_CODE_ERROR => "ERROR"
     case _ => "UNSET"
   }
 
-  private def spanRows(
-    r: ExportTraceServiceRequest,
-    now: Long
-  ): Vector[Row] = {
+  private def spanRows(r: ExportTraceServiceRequest, now: Long): Vector[Row] = {
     val out = Vector.newBuilder[Row]
     r.getResourceSpansList.asScala.foreach { rs =>
       val res = mutable.LinkedHashMap.empty[String, Value]
@@ -308,21 +252,16 @@ object Otlp {
 
   // ---------------------------------------------------------------- メトリクス
 
-  private def metricRows(
-    r: ExportMetricsServiceRequest,
-    now: Long
-  ): Batch = {
+  private def metricRows(r: ExportMetricsServiceRequest, now: Long): Batch = {
     val rows = mutable.LinkedHashMap.empty[String, Vector[Row]]
     val meta = mutable.LinkedHashMap.empty[String, MetricMeta]
-    def add(
-      name: String,
-      typ: String,
-      ts: Long,
-      labels: collection.Map[String, Value],
-      value: Double,
-      m: Metric,
-      metaType: String
-    ): Unit =
+    def add(name: String,
+            typ: String,
+            ts: Long,
+            labels: collection.Map[String, Value],
+            value: Double,
+            m: Metric,
+            metaType: String): Unit =
       Names.metric(name).foreach { s =>
         val f = labels.toMap ++
           Map("__name__" -> Value.Str(s), "__type__" -> Value.Str(typ), "value" -> Value.Dbl(value))
@@ -334,18 +273,15 @@ object Otlp {
       addAttrs(res, rm.getResource.getAttributesList)
       rm.getScopeMetricsList.asScala.foreach { sm =>
         sm.getMetricsList.asScala.foreach { m =>
-          def labels(
-            attrs: java.util.List[KeyValue]
-          ): mutable.LinkedHashMap[String, Value] = {
+          def labels(attrs: java.util.List[KeyValue]): mutable.LinkedHashMap[String, Value] = {
             val l = mutable.LinkedHashMap.empty[String, Value]
             l ++= res
             addAttrs(l, attrs)
             l.remove("value"); l.remove("__name__"); l.remove("__type__")
             l
           }
-          def num(
-            p: NumberDataPoint
-          ): Double = if p.getValueCase == NumberDataPoint.ValueCase.AS_INT then p.getAsInt.toDouble else p.getAsDouble
+          def num(p: NumberDataPoint): Double =
+            if p.getValueCase == NumberDataPoint.ValueCase.AS_INT then p.getAsInt.toDouble else p.getAsDouble
           val name = m.getName
           m.getDataCase match {
             case Metric.DataCase.GAUGE =>
@@ -371,10 +307,7 @@ object Otlp {
                 // Prometheus と同じく、le 以下の累積の件数にする
                 var acc = 0L
                 counts.zipWithIndex.foreach {
-                  (
-                    c,
-                    i
-                  ) =>
+                  (c, i) =>
                     acc += c
                     val le = bounds.lift(i).map(AlertLogic.fmt).getOrElse("+Inf")
                     add(

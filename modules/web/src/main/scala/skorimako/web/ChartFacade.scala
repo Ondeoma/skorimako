@@ -31,24 +31,15 @@ object ChartFacade {
 
   private[web] def uPlot: js.Dynamic = dom.window.asInstanceOf[js.Dynamic].uPlot
 
-  private def cssVar(
-    name: String,
-    fallback: String
-  ): String = {
+  private def cssVar(name: String, fallback: String): String = {
     val v = dom.window.getComputedStyle(dom.document.documentElement).getPropertyValue(name).trim
     if (v.nonEmpty) v else fallback
   }
 
-  private def fixed(
-    x: Double,
-    digits: Int
-  ): String = x.asInstanceOf[js.Dynamic].toFixed(digits).asInstanceOf[String]
+  private def fixed(x: Double, digits: Int): String = x.asInstanceOf[js.Dynamic].toFixed(digits).asInstanceOf[String]
 
   /** 数値の表示（大きい数は k・M・G、単位が By ならバイト）. */
-  def formatValue(
-    v: Double,
-    unit: String
-  ): String =
+  def formatValue(v: Double, unit: String): String =
     if (v.isNaN) "-"
     else if (unit == "By" || unit == "bytes") {
       val units = Vector("B", "KB", "MB", "GB", "TB")
@@ -68,48 +59,30 @@ object ChartFacade {
     }
 
   /** uPlot から渡る値（null のこともある）の表示. */
-  private def formatAny(
-    v: js.Any,
-    unit: String
-  ): String =
+  private def formatAny(v: js.Any, unit: String): String =
     if (v == null || js.isUndefined(v)) "-" else formatValue(v.asInstanceOf[Double], unit)
 
   /** 系列ごとの点を、共通の時刻の並びにそろえる（uPlot のデータの形. 時刻は秒）. */
-  private[web] def align(
-    series: List[ChartSeries]
-  ): js.Array[js.Array[js.Any]] = {
+  private[web] def align(series: List[ChartSeries]): js.Array[js.Array[js.Any]] = {
     val xs = series.flatMap(_.points.map(_._1)).distinct.sorted
     val index = xs.zipWithIndex.toMap
     val ys = series.map { s =>
       val arr = js.Array[js.Any]()
       xs.foreach(_ => arr.push(null))
-      s.points.foreach(
-        (
-          t,
-          v
-        ) => arr(index(t)) = v.fold[js.Any](null)(x => x)
-      )
+      s.points.foreach((t, v) => arr(index(t)) = v.fold[js.Any](null)(x => x))
       arr
     }
     js.Array((js.Array[js.Any](xs.map(t => (t / 1000): js.Any)*) :: ys)*)
   }
 
-  private[web] def height(
-    spec: ChartSpec
-  ): Int = if (spec.height > 0) spec.height else 220
+  private[web] def height(spec: ChartSpec): Int = if (spec.height > 0) spec.height else 220
 
-  private[web] def options(
-    el: dom.HTMLElement,
-    spec: ChartSpec
-  ): js.Object = {
+  private[web] def options(el: dom.HTMLElement, spec: ChartSpec): js.Object = {
     val fg = cssVar("--muted", "#64748b")
     val grid = cssVar("--line", "#e2e8f0")
     val bars = spec.kind == "bar"
     val series = spec.series.zipWithIndex.map {
-      (
-        s,
-        i
-      ) =>
+      (s, i) =>
         val color = if (s.color.nonEmpty) s.color else palette(i % palette.length)
         js.Dynamic.literal(
           label = if (s.label.nonEmpty) s.label else "値",
@@ -120,17 +93,11 @@ object ChartFacade {
           points = js.Dynamic.literal(show = false),
           spanGaps = false,
           value = (
-            (
-              _: js.Any,
-              v: js.Any
-            ) => formatAny(v, spec.unit)
-          ): js.Function2[js.Any, js.Any, String]
+            (_: js.Any, v: js.Any) => formatAny(v, spec.unit)): js.Function2[js.Any, js.Any, String]
         )
     }
-    val axisValues: js.Function2[js.Any, js.Array[js.Any], js.Array[String]] = (
-      _,
-      vals
-    ) => vals.map(v => formatAny(v, spec.unit))
+    val axisValues: js.Function2[js.Any, js.Array[js.Any], js.Array[String]] =
+      (_, vals) => vals.map(v => formatAny(v, spec.unit))
     val onSelect: js.Function1[js.Dynamic, Unit] = u =>
       spec.onSelect.foreach { f =>
         val sel = u.select
@@ -168,9 +135,6 @@ object ChartFacade {
   }
 
   /** el にグラフを描く. 戻り値で描き直し（update）・片付け（destroy）をする. */
-  def render(
-    el: dom.HTMLElement,
-    spec: ChartSpec
-  ): ChartHandle = new ChartHandle(el, spec)
+  def render(el: dom.HTMLElement, spec: ChartSpec): ChartHandle = new ChartHandle(el, spec)
 
 }

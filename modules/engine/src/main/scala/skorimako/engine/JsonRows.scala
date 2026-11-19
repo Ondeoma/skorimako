@@ -10,9 +10,7 @@ import scala.collection.mutable
 object JsonRows {
 
   /** 時刻: 数値は桁数で秒・ミリ秒・マイクロ秒・ナノ秒を見分ける。文字列は ISO 8601。 */
-  def toMicros(
-    j: Json
-  ): Option[Long] =
+  def toMicros(j: Json): Option[Long] =
     j.asNumber.flatMap(n => n.toLong.map(_.toDouble).orElse(Some(n.toDouble))).map { d =>
       if d > 1e17 then (d / 1000).toLong
       else if d > 1e14 then d.toLong
@@ -27,17 +25,9 @@ object JsonRows {
   private val timeKeys = List("_timestamp", "@timestamp", "timestamp", "time", "ts")
 
   /** 入れ子のオブジェクトは a_b の列にし、配列は JSON の文字列にする。 */
-  def flatten(
-    o: JsonObject,
-    out: mutable.Map[String, Value],
-    prefix: String = "",
-    depth: Int = 0
-  ): Unit =
+  def flatten(o: JsonObject, out: mutable.Map[String, Value], prefix: String = "", depth: Int = 0): Unit =
     o.toIterable.foreach {
-      (
-        k,
-        v
-      ) =>
+      (k, v) =>
         Names.column(prefix + k).foreach { name =>
           v.asObject match {
             case Some(child) if depth < 8 => flatten(child, out, name + "_", depth + 1)
@@ -47,21 +37,14 @@ object JsonRows {
     }
 
   /** 任意の JSON のログ（オブジェクト、またはその配列）。 */
-  def logs(
-    j: Json,
-    nowMicros: Long,
-    maxRows: Int
-  ): Either[String, Vector[Row]] = {
+  def logs(j: Json, nowMicros: Long, maxRows: Int): Either[String, Vector[Row]] = {
     val objs = j.asArray.map(_.flatMap(_.asObject)).orElse(j.asObject.map(Vector(_))).getOrElse(Vector.empty)
     if objs.isEmpty then Left("JSON のオブジェクト、またはオブジェクトの配列を送ってください")
     else if objs.size > maxRows then Left(s"1回に送れるのは $maxRows 件までです")
     else Right(objs.map(obj(_, nowMicros)))
   }
 
-  def obj(
-    o: JsonObject,
-    nowMicros: Long = System.currentTimeMillis() * 1000
-  ): Row = {
+  def obj(o: JsonObject, nowMicros: Long = System.currentTimeMillis() * 1000): Row = {
     val ts = timeKeys.iterator.flatMap(k => o(k).flatMap(toMicros)).nextOption().getOrElse(nowMicros)
     val f = mutable.LinkedHashMap.empty[String, Value]
     flatten(o.filterKeys(k => !timeKeys.contains(k)), f)
@@ -69,19 +52,12 @@ object JsonRows {
   }
 
   /** NDJSON（1行に1つのオブジェクト）。 */
-  def ndjson(
-    text: String,
-    nowMicros: Long,
-    maxRows: Int
-  ): Either[String, Vector[Row]] = {
+  def ndjson(text: String, nowMicros: Long, maxRows: Int): Either[String, Vector[Row]] = {
     val lines = text.linesIterator.map(_.trim).filter(_.nonEmpty).toVector
     if lines.size > maxRows then Left(s"1回に送れるのは $maxRows 件までです")
     else {
-      val parsed = lines.zipWithIndex.map(
-        (
-          l,
-          i
-        ) => io.circe.parser.parse(l).toOption.flatMap(_.asObject).toRight(s"${i + 1}行目が JSON のオブジェクトではありません")
+      val parsed = lines.zipWithIndex.map((l, i) =>
+        io.circe.parser.parse(l).toOption.flatMap(_.asObject).toRight(s"${i + 1}行目が JSON のオブジェクトではありません")
       )
       parsed.collectFirst { case Left(e) => e }.toLeft(parsed.collect { case Right(o) => obj(o, nowMicros) })
     }
@@ -90,12 +66,8 @@ object JsonRows {
   // ---------------------------------------------------------------- RUM
 
   /** User-Agent からブラウザ・OS・端末の種類。 */
-  def userAgent(
-    ua: String
-  ): Map[String, Value] = {
-    def ver(
-      re: String
-    ): Option[String] = re.r.findFirstMatchIn(ua).map(_.group(1).takeWhile(_ != '.'))
+  def userAgent(ua: String): Map[String, Value] = {
+    def ver(re: String): Option[String] = re.r.findFirstMatchIn(ua).map(_.group(1).takeWhile(_ != '.'))
     val browser =
       if ua.contains("Edg/") then Some("Edge" -> ver("Edg/([\\d.]+)"))
       else if ua.contains("OPR/") then Some("Opera" -> ver("OPR/([\\d.]+)"))
@@ -117,25 +89,16 @@ object JsonRows {
       else if ua.matches("(?i).*(bot|crawler|spider).*") then "bot"
       else "desktop"
     Map("user_agent" -> Value.Str(ua.take(500)), "os" -> Value.Str(os), "device" -> Value.Str(device)) ++
-      browser.map(
-        (
-          b,
-          v
-        ) => Map("browser" -> Value.Str(b), "browser_version" -> Value.Str(v.getOrElse("")))
-      ).getOrElse(Map.empty)
+      browser.map((b, v) => Map("browser" -> Value.Str(b), "browser_version" -> Value.Str(v.getOrElse("")))).getOrElse(
+        Map.empty
+      )
   }
 
   /**
    * ブラウザの SDK（/rum.js）から送られたイベント。{"events": [{type, ts, ...}], "ctx": {...}}。
    * 共通の ctx を各イベントに足し、User-Agent の情報と app を付ける。
    */
-  def rum(
-    j: Json,
-    app: String,
-    ua: String,
-    nowMicros: Long,
-    maxRows: Int
-  ): Either[String, Vector[Row]] = {
+  def rum(j: Json, app: String, ua: String, nowMicros: Long, maxRows: Int): Either[String, Vector[Row]] = {
     val c = j.hcursor
     val events = c.downField("events").as[Vector[Json]].getOrElse(Vector.empty).flatMap(_.asObject)
     if events.isEmpty then Left("events がありません")

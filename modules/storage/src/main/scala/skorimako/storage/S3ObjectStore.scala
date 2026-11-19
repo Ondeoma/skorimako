@@ -12,28 +12,17 @@ import java.net.URI
 import java.nio.file.{Files, Path, StandardCopyOption}
 
 /** S3 互換ストレージ。AWS SDK の同期クライアントを blocking プールで使う。 */
-final class S3ObjectStore private (
-  client: S3Client,
-  bucket: String,
-  prefix: String) extends ObjectStore {
+final class S3ObjectStore private (client: S3Client, bucket: String, prefix: String) extends ObjectStore {
 
-  private def k(
-    key: String
-  ): String = prefix + key
+  private def k(key: String): String = prefix + key
 
-  def put(
-    key: String,
-    file: Path
-  ): IO[Unit] =
+  def put(key: String, file: Path): IO[Unit] =
     IO.blocking(client.putObject(
       PutObjectRequest.builder().bucket(bucket).key(k(key)).contentType("application/vnd.apache.parquet").build(),
       RequestBody.fromFile(file)
     )).void
 
-  def download(
-    key: String,
-    dest: Path
-  ): IO[Boolean] =
+  def download(key: String, dest: Path): IO[Boolean] =
     IO.blocking {
       Files.createDirectories(dest.getParent)
       val tmp = Files.createTempFile(dest.getParent, ".dl-", ".part")
@@ -47,9 +36,7 @@ final class S3ObjectStore private (
       } finally Files.deleteIfExists(tmp)
     }
 
-  def delete(
-    key: String
-  ): IO[Unit] =
+  def delete(key: String): IO[Unit] =
     IO.blocking(client.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(k(key)).build())).void
 
   /** バケットがなければ作成する（開発環境向け。本番では事前作成を推奨）。 */
@@ -61,9 +48,7 @@ final class S3ObjectStore private (
 }
 
 object S3ObjectStore {
-  def resource(
-    cfg: S3Config
-  ): Resource[IO, S3ObjectStore] =
+  def resource(cfg: S3Config): Resource[IO, S3ObjectStore] =
     Resource
       .fromAutoCloseable(IO.blocking {
         S3Client

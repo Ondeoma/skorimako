@@ -16,9 +16,7 @@ import java.time.Instant
 import java.util.UUID
 
 /** 自分の情報・APIキー、管理画面（ユーザー・監査ログ）。 */
-final class UserRoutes(
-  users: UserStore,
-  val sessions: SessionAuth) extends RouteSupport {
+final class UserRoutes(users: UserStore, val sessions: SessionAuth) extends RouteSupport {
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
     case req @ GET -> Root / "api" / "me" => getMe(req)
@@ -31,14 +29,10 @@ final class UserRoutes(
     case req @ GET -> Root / "api" / "admin" / "audit" => getAdminAudit(req)
   }
 
-  private def getMe(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getMe(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s => sessions.appNames(req).flatMap(n => Ok(me(s).copy(appNames = n))))
 
-  private def patchMe(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def patchMe(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       body[UpdateMeReq](req) { r =>
         val tz = r.timezone.map(_.trim).filter(_.nonEmpty)
@@ -50,14 +44,10 @@ final class UserRoutes(
       }
     )
 
-  private def getMeKeys(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getMeKeys(req: Request[IO]): IO[Response[IO]] =
     sessionOnly(req)(s => users.keys(s.user.id).flatMap(Ok(_)))
 
-  private def postMeKeys(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postMeKeys(req: Request[IO]): IO[Response[IO]] =
     sessionOnly(req)(s =>
       body[CreateKeyReq](req) { r =>
         val scopes = r.scopes.map(_.trim.toLowerCase).distinct.filter(KeyScope.all.contains)
@@ -75,10 +65,7 @@ final class UserRoutes(
       }
     )
 
-  private def deleteMeKey(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def deleteMeKey(req: Request[IO], id: UUID): IO[Response[IO]] =
     sessionOnly(req)(s =>
       users.revokeKey(s.user.id, id).flatMap {
         case true => audit(users, s, "key.revoke", Some(id.toString)) *> NoContent()
@@ -86,15 +73,10 @@ final class UserRoutes(
       }
     )
 
-  private def getAdminUsers(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getAdminUsers(req: Request[IO]): IO[Response[IO]] =
     admin(req)(_ => users.list(param(req, "q")).flatMap(Ok(_)))
 
-  private def patchAdminUser(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def patchAdminUser(req: Request[IO], id: UUID): IO[Response[IO]] =
     admin(req)(s =>
       body[UpdateUserReq](req) { r =>
         if id == s.user.id then err(ErrorCode.CannotChangeOwnRole)
@@ -106,14 +88,10 @@ final class UserRoutes(
       }
     )
 
-  private def getAdminAudit(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getAdminAudit(req: Request[IO]): IO[Response[IO]] =
     admin(req)(_ => users.auditLog(intParam(req, "limit", 200, 1000)).flatMap(Ok(_)))
 
-  private def me(
-    s: skorimako.core.AuthSession
-  ): MeDto =
+  private def me(s: skorimako.core.AuthSession): MeDto =
     MeDto(s.user.id, s.user.name, s.user.email, s.user.avatarUrl, s.isAdmin, s.user.timezone)
 
 }

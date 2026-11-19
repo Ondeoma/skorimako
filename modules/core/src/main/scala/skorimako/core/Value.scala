@@ -29,9 +29,7 @@ enum Value {
   }
 
   /** 列の型に合わせて変換する（変換できなければ None = null）。 */
-  def coerce(
-    t: String
-  ): Option[Value] = (t, this) match {
+  def coerce(t: String): Option[Value] = (t, this) match {
     case (FieldType.Utf8, v) => Some(Str(v.asText))
     case (FieldType.Int64, v: Int) => Some(v)
     case (FieldType.Int64, Dbl(d)) => Option.when(!d.isNaN && !d.isInfinite)(Int(d.toLong))
@@ -63,9 +61,7 @@ enum Value {
 object Value {
 
   /** JSON の値から（入れ子のオブジェクト・配列は JSON の文字列にする）。null は None。 */
-  def fromJson(
-    j: Json
-  ): Option[Value] =
+  def fromJson(j: Json): Option[Value] =
     j.fold(
       None,
       b => Some(Bool(b)),
@@ -81,24 +77,14 @@ object Value {
 }
 
 /** 1行（1件のログ・メトリクスの点・スパン・RUM のイベント）。ts はマイクロ秒。fields の名前は列名の規則に合わせたもの。 */
-final case class Row(
-  ts: Long,
-  fields: Map[String, Value]) {
-  def toJson: Json = Json.fromFields((skorimako.shared.Columns.Timestamp -> Json.fromLong(ts)) :: fields.toList.map(
-    (
-      k,
-      v
-    ) => k -> v.toJson
-  ))
-  def str(
-    k: String
-  ): Option[String] = fields.get(k).map(_.asText)
+final case class Row(ts: Long, fields: Map[String, Value]) {
+  def toJson: Json = Json.fromFields((skorimako.shared.Columns.Timestamp -> Json.fromLong(ts)) ::
+    fields.toList.map((k, v) => k -> v.toJson))
+  def str(k: String): Option[String] = fields.get(k).map(_.asText)
 }
 
 object Row {
-  def fromJson(
-    j: Json
-  ): Option[Row] =
+  def fromJson(j: Json): Option[Row] =
     j.asObject.flatMap { o =>
       o(skorimako.shared.Columns.Timestamp).flatMap(_.asNumber).flatMap(_.toLong).map { ts =>
         Row(

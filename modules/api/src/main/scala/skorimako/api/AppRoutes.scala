@@ -12,11 +12,8 @@ import skorimako.shared.*
 import java.util.UUID
 
 /** ダッシュボードと、フロントエンドの観測（RUM）のアプリ。 */
-final class AppRoutes(
-  apps: AppStore,
-  streams: StreamStore,
-  users: UserStore,
-  val sessions: SessionAuth) extends RouteSupport {
+final class AppRoutes(apps: AppStore, streams: StreamStore, users: UserStore, val sessions: SessionAuth)
+  extends RouteSupport {
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
     // ---------------------------------------------------------------- ダッシュボード
@@ -32,14 +29,10 @@ final class AppRoutes(
     case req @ DELETE -> Root / "api" / "rum" / "apps" / UuidVar(id) => deleteRumApp(req, id)
   }
 
-  private def getDashboards(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getDashboards(req: Request[IO]): IO[Response[IO]] =
     authed(req)(_ => apps.dashboards.flatMap(Ok(_)))
 
-  private def postDashboards(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postDashboards(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       body[DashboardReq](req)(r =>
         dashOk(r) match {
@@ -51,16 +44,10 @@ final class AppRoutes(
       )
     )
 
-  private def getDashboard(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def getDashboard(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(_ => apps.dashboard(id).flatMap(_.fold(err(ErrorCode.DashboardNotFound))(Ok(_))))
 
-  private def putDashboard(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def putDashboard(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(s =>
       body[DashboardReq](req)(r =>
         dashOk(r) match {
@@ -73,10 +60,7 @@ final class AppRoutes(
       )
     )
 
-  private def deleteDashboard(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def deleteDashboard(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(s =>
       apps.deleteDashboard(id).flatMap {
         case false => err(ErrorCode.DashboardNotFound)
@@ -84,14 +68,10 @@ final class AppRoutes(
       }
     )
 
-  private def getRumApps(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getRumApps(req: Request[IO]): IO[Response[IO]] =
     authed(req)(_ => apps.rumApps.flatMap(Ok(_)))
 
-  private def postRumApps(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postRumApps(req: Request[IO]): IO[Response[IO]] =
     admin(req)(s =>
       body[RumAppReq](req)(r =>
         rumOk(r) match {
@@ -105,10 +85,7 @@ final class AppRoutes(
       )
     )
 
-  private def putRumApp(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def putRumApp(req: Request[IO], id: UUID): IO[Response[IO]] =
     admin(req)(s =>
       body[RumAppReq](req)(r =>
         rumOk(r) match {
@@ -122,10 +99,7 @@ final class AppRoutes(
       )
     )
 
-  private def deleteRumApp(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def deleteRumApp(req: Request[IO], id: UUID): IO[Response[IO]] =
     admin(req)(s =>
       apps.deleteRumApp(id).flatMap {
         case false => err(ErrorCode.RumAppNotFound)
@@ -177,14 +151,10 @@ final class AppRoutes(
       ).map(_ -> FieldType.Int64) ++
       List("cls" -> FieldType.Float64)).toMap
 
-  private def prepareRum(
-    stream: String
-  ): IO[Unit] =
+  private def prepareRum(stream: String): IO[Unit] =
     streams.ensure(StreamType.Rum, stream).flatMap(st => streams.mergeFields(st.id, rumFields)).void
 
-  private def dashOk(
-    r: DashboardReq
-  ): Either[String, DashboardReq] =
+  private def dashOk(r: DashboardReq): Either[String, DashboardReq] =
     for {
       _ <- Either.cond(r.name.trim.nonEmpty && r.name.trim.length <= 200, (), "名前を入力してください（200文字まで）")
       _ <- Either.cond(r.panels.size <= 100, (), "パネルは100個までです")
@@ -201,9 +171,7 @@ final class AppRoutes(
       panels = r.panels.map(p => p.copy(width = math.max(1, math.min(p.width, 4)), title = p.title.take(200)))
     )
 
-  private def rumOk(
-    r: RumAppReq
-  ): Either[String, (String, List[String], String)] =
+  private def rumOk(r: RumAppReq): Either[String, (String, List[String], String)] =
     for {
       _ <- Either.cond(r.name.trim.nonEmpty, (), "名前を入力してください")
       stream <- Names.stream(r.stream.getOrElse("default"))

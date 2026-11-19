@@ -20,10 +20,9 @@ import scala.util.matching.Regex
  *  - rename: 列の名前を変える
  * 取り込みの上限（1分あたりの行。ノードごと）を超えたら 429 で断る。ルールと上限は30秒ごとに読み直す。
  */
-final class Transform private (
-  store: StreamStore,
-  rules: Ref[IO, Map[(String, String), List[Transform.Compiled]]],
-  limits: Ref[IO, Map[(String, String), Int]]) {
+final class Transform private (store: StreamStore,
+                               rules: Ref[IO, Map[(String, String), List[Transform.Compiled]]],
+                               limits: Ref[IO, Map[(String, String), Int]]) {
 
   private val counters = new ConcurrentHashMap[(String, String), (Long, AtomicLong)]()
 
@@ -33,13 +32,7 @@ final class Transform private (
       ls <- store.limits
       compiled = rs.filter(_.enabled).flatMap(r => Transform.compile(r).map((r.streamType, r.stream) -> _))
       _ <- rules.set(compiled.groupMap(_._1)(_._2))
-      _ <- limits.set(ls.map(
-        (
-          t,
-          n,
-          m
-        ) => (t, n) -> m
-      ).toMap)
+      _ <- limits.set(ls.map((t, n, m) => (t, n) -> m).toMap)
     } yield ()
 
   def loop: IO[Nothing] =
@@ -47,38 +40,21 @@ final class Transform private (
       reload.handleErrorWith(e => sbirds.observe.Log.report(ErrorCode.IngestRulesReloadFailed, e.toString, e))).foreverM
 
   /** ルールを当て、上限を確かめる。 */
-  def apply(
-    streamType: String,
-    batch: Batch
-  ): IO[Either[AppError, Batch]] =
+  def apply(streamType: String, batch: Batch): IO[Either[AppError, Batch]] =
     (rules.get, limits.get).tupled.map {
-      (
-        rs,
-        ls
-      ) =>
+      (rs, ls) =>
         val out = batch.rows.map {
-          (
-            stream,
-            rows
-          ) =>
+          (stream, rows) =>
             val applicable = rs.getOrElse((streamType, "*"), Nil) ++ rs.getOrElse((streamType, stream), Nil)
             stream ->
               (if applicable.isEmpty then rows
                else
                  rows.flatMap(r =>
-                   applicable.foldLeft(Option(r))(
-                     (
-                       acc,
-                       c
-                     ) => acc.flatMap(c.run)
-                   )
+                   applicable.foldLeft(Option(r))((acc, c) => acc.flatMap(c.run))
                  ))
         }
         val over = out.toList.collectFirst(Function.unlift {
-          (
-            stream,
-            rows
-          ) =>
+          (stream, rows) =>
             ls.get((streamType, stream)).filter(max => !take(streamType, stream, rows.size, max)).map(max =>
               AppError(ErrorCode.IngestRateLimited, s"ストリーム $stream の取り込みの上限（1分あたり $max 行）を超えました")
             )
@@ -87,20 +63,12 @@ final class Transform private (
     }
 
   /** 1分の枠で数える。上限を超えるなら false（数えない）。 */
-  private def take(
-    streamType: String,
-    stream: String,
-    n: Int,
-    max: Int
-  ): Boolean = {
+  private def take(streamType: String, stream: String, n: Int, max: Int): Boolean = {
     val minute = System.currentTimeMillis() / 60000
     val k = (streamType, stream)
     val (m, c) = counters.compute(
       k,
-      (
-        _,
-        old
-      ) => if old == null || old._1 != minute then (minute, new AtomicLong(0)) else old
+      (_, old) => if old == null || old._1 != minute then (minute, new AtomicLong(0)) else old
     )
     if c.get() + n > max then false else { c.addAndGet(n); true }
   }
@@ -109,8 +77,7 @@ final class Transform private (
 object Transform {
 
   /** 当てる処理（None は行を捨てる）。 */
-  final case class Compiled(
-    run: Row => Option[Row])
+  final case class Compiled(run: Row => Option[Row])
 
   private val presets: Map[String, (Regex, String)] = Map(
     "email" -> ("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}".r, "***@***"),
@@ -125,18 +92,14 @@ object Transform {
       )
   )
 
-  private def fieldMatch(
-    spec: String
-  ): String => Boolean = {
+  private def fieldMatch(spec: String): String => Boolean = {
     val parts = spec.split(',').map(_.trim).filter(_.nonEmpty).toList
     if parts.contains("*") then _ => true
     else name => parts.exists(p => if p.endsWith("*") then name.startsWith(p.dropRight(1)) else name == p)
   }
 
   /** ルールを実行できる形にする（正規表現が壊れていれば None）。 */
-  def compile(
-    r: IngestRuleDto
-  ): Option[Compiled] =
+  def compile(r: IngestRuleDto): Option[Compiled] =
     scala.util.Try {
       r.kind match {
         case IngestRuleKind.Mask =>
@@ -154,12 +117,7 @@ object Transform {
           val f = fieldMatch(r.field)
           Compiled(row =>
             Some(row.copy(fields =
-              row.fields.filterNot(
-                (
-                  k,
-                  _
-                ) => f(k)
-              )
+              row.fields.filterNot((k, _) => f(k))
             ))
           )
         case IngestRuleKind.DropRows =>
@@ -185,9 +143,7 @@ object Transform {
     }.toOption
 
   /** ルールの検査（API で作る・変えるとき）。 */
-  def validate(
-    r: IngestRuleReq
-  ): Either[String, IngestRuleReq] =
+  def validate(r: IngestRuleReq): Either[String, IngestRuleReq] =
     for {
       _ <- Either.cond(StreamType.all.contains(r.streamType), (), "データの種類が正しくありません")
       _ <- Either.cond(IngestRuleKind.all.contains(r.kind), (), "変換の種類が正しくありません")
@@ -205,9 +161,7 @@ object Transform {
       _ <- if needsRe then scala.util.Try(r.pattern.r).toEither.left.map(_ => "正規表現が正しくありません").void else Right(())
     } yield r.copy(stream = if r.stream == "*" then "*" else Names.stream(r.stream).getOrElse(r.stream))
 
-  def create(
-    store: StreamStore
-  ): IO[Transform] =
+  def create(store: StreamStore): IO[Transform] =
     for {
       r <- Ref.of[IO, Map[(String, String), List[Compiled]]](Map.empty)
       l <- Ref.of[IO, Map[(String, String), Int]](Map.empty)

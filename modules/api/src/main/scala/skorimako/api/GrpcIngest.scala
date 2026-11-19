@@ -31,11 +31,9 @@ object GrpcIngest {
 
   /** メタデータをコンテキストに移す（サービスの中から読むため）。 */
   private object Capture extends ServerInterceptor {
-    def interceptCall[Q, R](
-      call: ServerCall[Q, R],
-      headers: Metadata,
-      next: ServerCallHandler[Q, R]
-    ): ServerCall.Listener[Q] = {
+    def interceptCall[Q, R](call: ServerCall[Q, R],
+                            headers: Metadata,
+                            next: ServerCallHandler[Q, R]): ServerCall.Listener[Q] = {
       val token = Option(headers.get(AuthKey)).map(_.trim).map(h =>
         if h.toLowerCase.startsWith("bearer ") then h.drop(7).trim else h
       ).getOrElse("")
@@ -47,21 +45,12 @@ object GrpcIngest {
     }
   }
 
-  def resource(
-    port: Int,
-    ingest: IngestService,
-    sessions: SessionAuth,
-    maxBytes: Int
-  ): Resource[IO, Unit] =
+  def resource(port: Int, ingest: IngestService, sessions: SessionAuth, maxBytes: Int): Resource[IO, Unit] =
     Dispatcher.parallel[IO].flatMap { d =>
       /** 認証してから取り込み、gRPC の状態で応える。 */
-      def handle[Res](
-        streamType: String,
-        observer: StreamObserver[Res],
-        ok: Res
-      )(
-        parse: (String, Long) => Either[String, Batch]
-      ): Unit = {
+      def handle[Res](streamType: String,
+                      observer: StreamObserver[Res],
+                      ok: Res)(parse: (String, Long) => Either[String, Batch]): Unit = {
         val token = CtxToken.get()
         val stream = Names.stream(CtxStream.get())
         val io = sessions.fromKey(token).flatMap {
@@ -90,39 +79,22 @@ object GrpcIngest {
       }
 
       val logs = new LogsServiceGrpc.LogsServiceImplBase {
-        override def `export`(
-          req: ExportLogsServiceRequest,
-          obs: StreamObserver[ExportLogsServiceResponse]
-        ): Unit =
-          handle(StreamType.Logs, obs, ExportLogsServiceResponse.getDefaultInstance)(
-            (
-              st,
-              now
-            ) => Right(Otlp.logsOf(req, st, now))
+        override def `export`(req: ExportLogsServiceRequest, obs: StreamObserver[ExportLogsServiceResponse]): Unit =
+          handle(StreamType.Logs, obs, ExportLogsServiceResponse.getDefaultInstance)((st, now) =>
+            Right(Otlp.logsOf(req, st, now))
           )
       }
       val traces = new TraceServiceGrpc.TraceServiceImplBase {
-        override def `export`(
-          req: ExportTraceServiceRequest,
-          obs: StreamObserver[ExportTraceServiceResponse]
-        ): Unit =
-          handle(StreamType.Traces, obs, ExportTraceServiceResponse.getDefaultInstance)(
-            (
-              st,
-              now
-            ) => Right(Otlp.tracesOf(req, st, now))
+        override def `export`(req: ExportTraceServiceRequest, obs: StreamObserver[ExportTraceServiceResponse]): Unit =
+          handle(StreamType.Traces, obs, ExportTraceServiceResponse.getDefaultInstance)((st, now) =>
+            Right(Otlp.tracesOf(req, st, now))
           )
       }
       val metrics = new MetricsServiceGrpc.MetricsServiceImplBase {
-        override def `export`(
-          req: ExportMetricsServiceRequest,
-          obs: StreamObserver[ExportMetricsServiceResponse]
-        ): Unit =
-          handle(StreamType.Metrics, obs, ExportMetricsServiceResponse.getDefaultInstance)(
-            (
-              _,
-              now
-            ) => Right(Otlp.metricsOf(req, now))
+        override def `export`(req: ExportMetricsServiceRequest,
+                              obs: StreamObserver[ExportMetricsServiceResponse]): Unit =
+          handle(StreamType.Metrics, obs, ExportMetricsServiceResponse.getDefaultInstance)((_, now) =>
+            Right(Otlp.metricsOf(req, now))
           )
       }
 

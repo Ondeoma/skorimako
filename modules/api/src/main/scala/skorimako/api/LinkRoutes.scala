@@ -17,13 +17,12 @@ import java.util.UUID
  * リンクの要約（stui などが、メッセージに貼られた skorimako の URL に名前を出すため）。POST /api/links/lookup {urls}。
  * 対応: /traces/{id}・/alerts/{id}・/dashboards/{id}・/logs?stream=…&where=…・/metrics?metric=…。見られないものは返さない。
  */
-final class LinkRoutes(
-  streams: StreamStore,
-  alerts: AlertStore,
-  apps: AppStore,
-  acl: Acl,
-  val sessions: SessionAuth,
-  cfg: ApiConfig) extends RouteSupport {
+final class LinkRoutes(streams: StreamStore,
+                       alerts: AlertStore,
+                       apps: AppStore,
+                       acl: Acl,
+                       val sessions: SessionAuth,
+                       cfg: ApiConfig) extends RouteSupport {
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
     // stui の「リンクの名前」の形: {"ids": ["traces/…", "alerts/…", "dashboards/…"]} → {"links": [{id, kind, title, summary, status, icon}]}
@@ -31,9 +30,7 @@ final class LinkRoutes(
     case req @ POST -> Root / "api" / "links" / "lookup" => postLinksLookup(req)
   }
 
-  private def postLinksTitles(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postLinksTitles(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       body[Json](req) { j =>
         val ids =
@@ -46,30 +43,21 @@ final class LinkRoutes(
       }
     )
 
-  private def postLinksLookup(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postLinksLookup(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       body[LinkLookupReq](req)(r =>
         r.urls.distinct.take(100).traverse(u => info(s, u.trim).handleError(_ => None)).flatMap(xs => Ok(xs.flatten))
       )
     )
 
-  private def info(
-    s: AuthSession,
-    url: String
-  ): IO[Option[LinkInfoDto]] =
+  private def info(s: AuthSession, url: String): IO[Option[LinkInfoDto]] =
     Uri.fromString(url).toOption.filter(u => u.path.renderString.startsWith("/") && sameSite(url)) match {
       case None => IO.pure(None)
       case Some(u) =>
         u.path.segments.map(_.decoded()).toList match {
           case "traces" :: id :: Nil =>
             streams.findTrace(id.toLowerCase).flatMap(_.headOption.traverse {
-              (
-                sid,
-                mi,
-                ma
-              ) =>
+              (sid, mi, ma) =>
                 streams.byId(sid).flatMap(_.traverse(st => acl.visible(s.viewer, StreamType.Traces, st.name))).flatMap {
                   case Some(true) =>
                     streams.searchTraces(
@@ -132,16 +120,11 @@ final class LinkRoutes(
         }
     }
 
-  private def sameSite(
-    url: String
-  ): Boolean =
+  private def sameSite(url: String): Boolean =
     !url.startsWith("http") || url.startsWith(cfg.publicUrl.stripSuffix("/") + "/")
 
   /** stui の連携の形（ID ごと）の1件: id は traces/{id}・alerts/{id}・dashboards/{id}。 */
-  private def titleJson(
-    id: String,
-    i: LinkInfoDto
-  ): Json = {
+  private def titleJson(id: String, i: LinkInfoDto): Json = {
     val icon = (i.kind, i.status) match {
       case ("trace", Some("error")) => "⚠️"
       case ("trace", _) => "🧭"

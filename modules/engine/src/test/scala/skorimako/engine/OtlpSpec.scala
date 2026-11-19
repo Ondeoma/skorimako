@@ -57,21 +57,12 @@ class OtlpProtobufSpec extends munit.FunSuite {
   import io.opentelemetry.proto.resource.v1.Resource
   import io.opentelemetry.proto.trace.v1.{ResourceSpans, ScopeSpans, Span, Status}
 
-  private def kv(
-    k: String,
-    v: String
-  ) = KeyValue.newBuilder().setKey(k).setValue(AnyValue.newBuilder().setStringValue(v)).build()
+  private def kv(k: String, v: String) =
+    KeyValue.newBuilder().setKey(k).setValue(AnyValue.newBuilder().setStringValue(v)).build()
 
   test("OTLP/protobuf のスパン: 所要時間・状態・サービス名、トレースの索引") {
     val trace = ByteString.copyFrom(Array.tabulate[Byte](16)(i => (i + 1).toByte))
-    def span(
-      id: Int,
-      parent: Option[Int],
-      name: String,
-      start: Long,
-      end: Long,
-      err: Boolean
-    ) = {
+    def span(id: Int, parent: Option[Int], name: String, start: Long, end: Long, err: Boolean) = {
       val b =
         Span.newBuilder().setTraceId(trace).setSpanId(ByteString.copyFrom(Array.fill[Byte](8)(id.toByte))).setName(name)
           .setKind(Span.SpanKind.SPAN_KIND_SERVER).setStartTimeUnixNano(start).setEndTimeUnixNano(end)

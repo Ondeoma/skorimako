@@ -8,10 +8,7 @@ package skorimako.core
  * 7xxx: ノード間の問い合わせ, 9xxx: サーバー内部・バックグラウンドの処理.
  * Prometheus 互換の API・MCP（JSON-RPC）・OAuth の応答は、それぞれの決まりの形のまま（ここのコードは使わない）.
  */
-enum ErrorCode(
-  val code: String,
-  val status: Int,
-  val message: String) extends sbirds.shared.ErrorCode {
+enum ErrorCode(val code: String, val status: Int, val message: String) extends sbirds.shared.ErrorCode {
   case NotLoggedIn extends ErrorCode("SKORIMAKO-1001", 401, "ログインしてください")
   case ApiKeyIngestOnly extends ErrorCode("SKORIMAKO-1002", 403, "このAPIキーは取り込み専用です（read スコープが必要です）")
   case ApiKeyNeedsWrite extends ErrorCode("SKORIMAKO-1003", 403, "このAPIキーは参照専用です（write スコープが必要です）")

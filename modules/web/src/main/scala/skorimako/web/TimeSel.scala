@@ -3,10 +3,7 @@ package skorimako.web
 import scala.scalajs.js
 
 /** 時間の範囲. preset は 15m・1h・6h・24h・7d・30d・custom（custom のときは from・to のミリ秒）. */
-final case class TimeSel(
-  preset: String,
-  from: Double = 0,
-  to: Double = 0) {
+final case class TimeSel(preset: String, from: Double = 0, to: Double = 0) {
 
   /** (始まり, 終わり) のマイクロ秒. 相対の範囲は呼んだ時点の今から. */
   def micros: (Long, Long) = {
@@ -31,9 +28,7 @@ object TimeSel {
     "7d" -> "直近7日",
     "30d" -> "直近30日"
   )
-  def presetMs(
-    p: String
-  ): Option[Double] = p match {
+  def presetMs(p: String): Option[Double] = p match {
     case "5m" => Some(5 * 60e3)
     case "15m" => Some(15 * 60e3)
     case "1h" => Some(3600e3)
@@ -43,8 +38,5 @@ object TimeSel {
     case "30d" => Some(30 * 86400e3)
     case _ => None
   }
-  def custom(
-    fromMs: Double,
-    toMs: Double
-  ): TimeSel = TimeSel("custom", math.min(fromMs, toMs), math.max(fromMs, toMs))
+  def custom(fromMs: Double, toMs: Double): TimeSel = TimeSel("custom", math.min(fromMs, toMs), math.max(fromMs, toMs))
 }

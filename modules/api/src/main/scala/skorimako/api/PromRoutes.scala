@@ -18,12 +18,11 @@ import skorimako.shared.*
  *  - HTTP API（Grafana の Prometheus のデータソースの URL を {skorimako}/api/prom にする）:
  *    /api/v1/query・query_range・labels・label/{name}/values・series・metadata・status/buildinfo
  */
-final class PromRoutes(
-  ingest: IngestService,
-  engine: QueryEngine,
-  streams: StreamStore,
-  val sessions: SessionAuth,
-  cfg: ApiConfig)
+final class PromRoutes(ingest: IngestService,
+                       engine: QueryEngine,
+                       streams: StreamStore,
+                       val sessions: SessionAuth,
+                       cfg: ApiConfig)
   extends RouteSupport {
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
@@ -39,19 +38,13 @@ final class PromRoutes(
     case req @ GET -> Root / "api" / "prom" / "api" / "v1" / "status" / "buildinfo" => getPromV1StatusBuildinfo(req)
   }
 
-  private def postPromPush(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postPromPush(req: Request[IO]): IO[Response[IO]] =
     write(req)
 
-  private def postPromV1Write(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postPromV1Write(req: Request[IO]): IO[Response[IO]] =
     write(req)
 
-  private def getPromV1Query(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getPromV1Query(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       params(req).flatMap { p =>
         (
@@ -64,9 +57,7 @@ final class PromRoutes(
       }
     )
 
-  private def getPromV1QueryRange(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getPromV1QueryRange(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       params(req).flatMap { p =>
         (for {
@@ -82,9 +73,7 @@ final class PromRoutes(
       }
     )
 
-  private def getPromV1Labels(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getPromV1Labels(req: Request[IO]): IO[Response[IO]] =
     authed(req)(_ =>
       streams.fieldNames(StreamType.Metrics).flatMap(ns =>
         ok(
@@ -93,10 +82,7 @@ final class PromRoutes(
       )
     )
 
-  private def getPromV1LabelValues(
-    req: Request[IO],
-    name: String
-  ): IO[Response[IO]] =
+  private def getPromV1LabelValues(req: Request[IO], name: String): IO[Response[IO]] =
     authed(req)(s =>
       if name == "__name__" then
         streams.list(Some(StreamType.Metrics), None, cfg.retentionDays).flatMap(ss =>
@@ -105,9 +91,7 @@ final class PromRoutes(
       else streams.tagValues(StreamType.Metrics, name, 10000).flatMap(vs => ok(Json.fromValues(vs.map(_.asJson))))
     )
 
-  private def getPromV1Series(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getPromV1Series(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       params(req).flatMap { p =>
         val now = System.currentTimeMillis()
@@ -129,9 +113,7 @@ final class PromRoutes(
       }
     )
 
-  private def getPromV1Metadata(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getPromV1Metadata(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       streams.list(Some(StreamType.Metrics), None, cfg.retentionDays).flatMap(ss =>
         engine.acl.filter(s.viewer, StreamType.Metrics, ss)(_.name)
@@ -152,19 +134,11 @@ final class PromRoutes(
         )
     )
 
-  private def getPromV1StatusBuildinfo(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getPromV1StatusBuildinfo(req: Request[IO]): IO[Response[IO]] =
     authed(req)(_ => ok(Json.obj("version" -> "2.53.0".asJson, "application" -> s"skorimako ${cfg.version}".asJson)))
 
-  private def ok(
-    data: Json
-  ): IO[Response[IO]] = Ok(Json.obj("status" -> "success".asJson, "data" -> data))
-  private def bad(
-    msg: String,
-    status: Status = Status.BadRequest,
-    kind: String = "bad_data"
-  ): IO[Response[IO]] =
+  private def ok(data: Json): IO[Response[IO]] = Ok(Json.obj("status" -> "success".asJson, "data" -> data))
+  private def bad(msg: String, status: Status = Status.BadRequest, kind: String = "bad_data"): IO[Response[IO]] =
     IO.pure(Response[IO](status).withEntity(Json.obj(
       "status" -> "error".asJson,
       "errorType" -> kind.asJson,
@@ -172,9 +146,7 @@ final class PromRoutes(
     )))
 
   /** パラメーター（クエリと、POST のフォームの両方）。 */
-  private def params(
-    req: Request[IO]
-  ): IO[Map[String, List[String]]] = {
+  private def params(req: Request[IO]): IO[Map[String, List[String]]] = {
     val q = req.multiParams.view.mapValues(_.toList).toMap
     if req.method == Method.POST then
       req.as[UrlForm].attempt.map(_.fold(_ => q, f => q ++ f.values.view.mapValues(_.toList).toMap))
@@ -182,80 +154,46 @@ final class PromRoutes(
   }
 
   /** 時刻（UNIX 秒の小数か RFC3339）をミリ秒に。 */
-  private def time(
-    s: String
-  ): Either[String, Long] =
+  private def time(s: String): Either[String, Long] =
     s.toDoubleOption.map(d => (d * 1000).toLong)
       .orElse(scala.util.Try(java.time.OffsetDateTime.parse(s).toInstant.toEpochMilli).toOption)
       .toRight(s"時刻 $s が読めません")
 
-  private def step(
-    s: String
-  ): Either[String, Long] =
+  private def step(s: String): Either[String, Long] =
     s.toDoubleOption.map(d => (d * 1000).toLong).map(Right(_)).getOrElse(PromQL.duration(s)).flatMap(ms =>
       Either.cond(ms > 0, ms, "step は正の値にしてください")
     )
 
-  private def fmt(
-    v: Double
-  ): String =
+  private def fmt(v: Double): String =
     if v.isNaN then "NaN"
     else if v.isPosInfinity then "+Inf"
     else if v.isNegInfinity then "-Inf" else BigDecimal(v).bigDecimal.stripTrailingZeros.toPlainString
 
-  private def labelsJson(
-    l: Prom.Labels
-  ): Json = Json.fromFields(l.toList.sortBy(_._1).map(
-    (
-      k,
-      v
-    ) => k -> v.asJson
-  ))
+  private def labelsJson(l: Prom.Labels): Json = Json.fromFields(l.toList.sortBy(_._1).map((k, v) => k -> v.asJson))
 
   /** 時刻は UNIX 秒（指数表記にしない）。 */
-  private def secs(
-    t: Long
-  ): Json = Json.fromBigDecimal(BigDecimal(t) / 1000)
-  private def pt(
-    t: Long,
-    v: Double
-  ): Json = Json.arr(secs(t), fmt(v).asJson)
+  private def secs(t: Long): Json = Json.fromBigDecimal(BigDecimal(t) / 1000)
+  private def pt(t: Long, v: Double): Json = Json.arr(secs(t), fmt(v).asJson)
 
-  private def resultJson(
-    r: Prom.Result
-  ): Json = r match {
+  private def resultJson(r: Prom.Result): Json = r match {
     case Prom.Result.Matrix(ss) =>
       Json.obj(
         "resultType" -> "matrix".asJson,
-        "result" -> Json.fromValues(ss.map(
-          (
-            l,
-            ps
-          ) => Json.obj("metric" -> labelsJson(l), "values" -> Json.fromValues(ps.map(pt)))
+        "result" -> Json.fromValues(ss.map((l, ps) =>
+          Json.obj("metric" -> labelsJson(l), "values" -> Json.fromValues(ps.map(pt)))
         ))
       )
     case Prom.Result.Vec(t, xs) =>
       Json.obj(
         "resultType" -> "vector".asJson,
-        "result" -> Json.fromValues(xs.map(
-          (
-            l,
-            v
-          ) => Json.obj("metric" -> labelsJson(l), "value" -> pt(t, v))
-        ))
+        "result" -> Json.fromValues(xs.map((l, v) => Json.obj("metric" -> labelsJson(l), "value" -> pt(t, v))))
       )
     case Prom.Result.Scal(t, v) => Json.obj("resultType" -> "scalar".asJson, "result" -> pt(t, v))
     case Prom.Result.Strg(t, s) => Json.obj("resultType" -> "string".asJson, "result" -> Json.arr(secs(t), s.asJson))
   }
 
   /** PromQL を評価する（start・end・step はミリ秒。step が 0 なら時刻 end の問い合わせ）。 */
-  def evaluate(
-    v: Viewer,
-    q: String,
-    start: Long,
-    end: Long,
-    stepMs: Long
-  ): IO[Either[String, Prom.Result]] =
+  def evaluate(v: Viewer, q: String, start: Long, end: Long, stepMs: Long): IO[Either[String, Prom.Result]] =
     PromQL.parse(q) match {
       case Left(e) => IO.pure(Left(e))
       case Right(expr) =>
@@ -274,14 +212,10 @@ final class PromRoutes(
           }
     }
 
-  private def first(
-    p: Map[String, List[String]],
-    k: String
-  ): Option[String] = p.get(k).flatMap(_.headOption).map(_.trim).filter(_.nonEmpty)
+  private def first(p: Map[String, List[String]], k: String): Option[String] =
+    p.get(k).flatMap(_.headOption).map(_.trim).filter(_.nonEmpty)
 
-  private def write(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def write(req: Request[IO]): IO[Response[IO]] =
     sessions.fromRequest(req).flatMap {
       case None => err(ErrorCode.IngestPromApiKeyRequired)
       case Some(s) if !s.canIngest => err(ErrorCode.IngestScopeRequired)

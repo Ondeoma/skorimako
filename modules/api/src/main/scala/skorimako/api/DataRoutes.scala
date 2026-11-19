@@ -15,16 +15,15 @@ import skorimako.shared.*
 import java.util.UUID
 
 /** ストリームの一覧・設定・取り込みのルールと、検索（SQL・ログ・メトリクス・トレース・サービス）。見られないストリームは出さない。 */
-final class DataRoutes(
-  streams: StreamStore,
-  alerts: AlertStore,
-  engine: QueryEngine,
-  ingester: Ingester,
-  transform: Transform,
-  objects: skorimako.storage.ObjectStore,
-  users: UserStore,
-  val sessions: SessionAuth,
-  cfg: ApiConfig) extends RouteSupport {
+final class DataRoutes(streams: StreamStore,
+                       alerts: AlertStore,
+                       engine: QueryEngine,
+                       ingester: Ingester,
+                       transform: Transform,
+                       objects: skorimako.storage.ObjectStore,
+                       users: UserStore,
+                       val sessions: SessionAuth,
+                       cfg: ApiConfig) extends RouteSupport {
 
   val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
     // ---------------------------------------------------------------- ホーム
@@ -54,17 +53,10 @@ final class DataRoutes(
     case req @ GET -> Root / "api" / "traces" / id => getTrace(req, id)
   }
 
-  private def getOverview(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getOverview(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       (visibleStreams(s, None, None), alerts.firing, alerts.events(None, 20), streams.ingestedToday).tupled.flatMap {
-        (
-          ss,
-          f,
-          ev,
-          today
-        ) =>
+        (ss, f, ev, today) =>
           Ok(OverviewDto(
             ss.filter(_.streamType != StreamType.Metrics) ++
               ss.filter(_.streamType == StreamType.Metrics).sortBy(-_.docCount).take(20),
@@ -75,28 +67,18 @@ final class DataRoutes(
       }
     )
 
-  private def getStreams(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getStreams(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       visibleStreams(s, param(req, "type").filter(StreamType.all.contains), param(req, "q")).flatMap(Ok(_))
     )
 
-  private def getServiceNames(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getServiceNames(req: Request[IO]): IO[Response[IO]] =
     authed(req)(_ => streams.serviceNames.flatMap(Ok(_)))
 
-  private def getMetricsServices(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getMetricsServices(req: Request[IO]): IO[Response[IO]] =
     authed(req)(_ => streams.metricServices.flatMap(Ok(_)))
 
-  private def getStreamValues(
-    req: Request[IO],
-    t: String,
-    name: String
-  ): IO[Response[IO]] =
+  private def getStreamValues(req: Request[IO], t: String, name: String): IO[Response[IO]] =
     authed(req)(s =>
       withStream(s, t, name)(st =>
         param(req, "field").filter(_.nonEmpty) match {
@@ -106,9 +88,7 @@ final class DataRoutes(
       )
     )
 
-  private def postPanelsSql(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postPanelsSql(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       body[PanelSqlReq](req)(r =>
         if !StreamType.all.contains(r.spec.streamType) then err(ErrorCode.StreamTypeInvalid)
@@ -130,11 +110,7 @@ final class DataRoutes(
       )
     )
 
-  private def getStream(
-    req: Request[IO],
-    t: String,
-    name: String
-  ): IO[Response[IO]] =
+  private def getStream(req: Request[IO], t: String, name: String): IO[Response[IO]] =
     authed(req)(s =>
       withStream(s, t, name)(st =>
         (streams.dto(st.id, cfg.retentionDays), streams.fields(st.id)).tupled.flatMap {
@@ -144,11 +120,7 @@ final class DataRoutes(
       )
     )
 
-  private def patchStream(
-    req: Request[IO],
-    t: String,
-    name: String
-  ): IO[Response[IO]] =
+  private def patchStream(req: Request[IO], t: String, name: String): IO[Response[IO]] =
     admin(req)(s =>
       body[UpdateStreamReq](req) { r =>
         if r.retentionDays.exists(d => d < 0 || d > 3650) then
@@ -169,11 +141,7 @@ final class DataRoutes(
       }
     )
 
-  private def deleteStream(
-    req: Request[IO],
-    t: String,
-    name: String
-  ): IO[Response[IO]] =
+  private def deleteStream(req: Request[IO], t: String, name: String): IO[Response[IO]] =
     admin(req)(s =>
       withStream(s, t, name)(st =>
         // 行と一緒に S3 のファイルも消す（失敗したものは残る。検索からは見えなくなる）
@@ -185,33 +153,20 @@ final class DataRoutes(
       )
     )
 
-  private def getIngestPending(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getIngestPending(req: Request[IO]): IO[Response[IO]] =
     admin(req)(_ => ingester.pending.flatMap(Ok(_)))
 
-  private def getNodes(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getNodes(req: Request[IO]): IO[Response[IO]] =
     admin(req)(_ =>
       streams.peers("").flatMap(ns =>
-        Ok(ns.map(
-          (
-            id,
-            url
-          ) => Json.obj("id" -> id.asJson, "url" -> url.asJson)
-        ))
+        Ok(ns.map((id, url) => Json.obj("id" -> id.asJson, "url" -> url.asJson)))
       )
     )
 
-  private def getIngestRules(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getIngestRules(req: Request[IO]): IO[Response[IO]] =
     admin(req)(_ => streams.ingestRules.flatMap(Ok(_)))
 
-  private def postIngestRules(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postIngestRules(req: Request[IO]): IO[Response[IO]] =
     admin(req)(s =>
       body[IngestRuleReq](req)(r =>
         ruleOk(r) match {
@@ -224,10 +179,7 @@ final class DataRoutes(
       )
     )
 
-  private def putIngestRule(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def putIngestRule(req: Request[IO], id: UUID): IO[Response[IO]] =
     admin(req)(s =>
       body[IngestRuleReq](req)(r =>
         ruleOk(r) match {
@@ -241,10 +193,7 @@ final class DataRoutes(
       )
     )
 
-  private def deleteIngestRule(
-    req: Request[IO],
-    id: UUID
-  ): IO[Response[IO]] =
+  private def deleteIngestRule(req: Request[IO], id: UUID): IO[Response[IO]] =
     admin(req)(s =>
       streams.deleteIngestRule(id).flatMap {
         case false => err(ErrorCode.RuleNotFound)
@@ -252,9 +201,7 @@ final class DataRoutes(
       }
     )
 
-  private def postQuerySql(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postQuerySql(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       body[SqlQueryReq](req)(r =>
         if !StreamType.all.contains(r.streamType) then
@@ -263,19 +210,13 @@ final class DataRoutes(
       )
     )
 
-  private def postQueryLogs(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postQueryLogs(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s => body[LogSearchReq](req)(r => query(engine.logs(s.viewer, r))))
 
-  private def postQueryMetrics(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postQueryMetrics(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s => body[MetricQueryReq](req)(r => query(engine.metrics(s.viewer, r))))
 
-  private def postTracesSearch(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def postTracesSearch(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
       body[TraceSearchReq](req) { r =>
         traceStreams(s, r.stream).flatMap(ids =>
@@ -284,25 +225,19 @@ final class DataRoutes(
       }
     )
 
-  private def getTracesServices(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getTracesServices(req: Request[IO]): IO[Response[IO]] =
     authed(req) { s =>
       val (start, end) = range(req)
       traceStreams(s, param(req, "stream")).flatMap(ids => streams.services(ids.map(_._1), start, end)).flatMap(Ok(_))
     }
 
-  private def getServicesMap(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getServicesMap(req: Request[IO]): IO[Response[IO]] =
     authed(req) { s =>
       val (start, end) = range(req)
       query(engine.serviceMap(s.viewer, param(req, "stream").getOrElse("default"), start, end))
     }
 
-  private def getServicesSeries(
-    req: Request[IO]
-  ): IO[Response[IO]] =
+  private def getServicesSeries(req: Request[IO]): IO[Response[IO]] =
     authed(req) { s =>
       val (start, end) = range(req)
       param(req, "service") match {
@@ -312,48 +247,28 @@ final class DataRoutes(
       }
     }
 
-  private def getTrace(
-    req: Request[IO],
-    id: String
-  ): IO[Response[IO]] =
+  private def getTrace(req: Request[IO], id: String): IO[Response[IO]] =
     authed(req)(s => engine.trace(s.viewer, id).flatMap(_.fold(e => err(ErrorCode.TraceNotFound, e), Ok(_))))
 
   private object TypeVar {
-    def unapply(
-      s: String
-    ): Option[String] = Option.when(StreamType.all.contains(s))(s)
+    def unapply(s: String): Option[String] = Option.when(StreamType.all.contains(s))(s)
   }
 
   private val acl = engine.acl
 
   /** 見られるストリームだけ（見られなければ 404）。 */
-  private def withStream(
-    s: AuthSession,
-    t: String,
-    name: String
-  )(
-    f: StreamRow => IO[Response[IO]]
-  ): IO[Response[IO]] =
+  private def withStream(s: AuthSession, t: String, name: String)(f: StreamRow => IO[Response[IO]]): IO[Response[IO]] =
     streams.find(t, name).flatMap {
       case None => err(ErrorCode.StreamNotFound)
       case Some(st) => acl.visible(s.viewer, t, name).ifM(f(st), err(ErrorCode.StreamNotFound))
     }
 
-  private def visibleStreams(
-    s: AuthSession,
-    t: Option[String],
-    q: Option[String]
-  ): IO[List[StreamDto]] =
+  private def visibleStreams(s: AuthSession, t: Option[String], q: Option[String]): IO[List[StreamDto]] =
     streams.list(t, q, cfg.retentionDays).flatMap(ss => acl.filterTyped(s.viewer, ss)(x => (x.streamType, x.name)))
 
-  private def ruleOk(
-    r: IngestRuleReq
-  ): Either[String, IngestRuleReq] = Transform.validate(r)
+  private def ruleOk(r: IngestRuleReq): Either[String, IngestRuleReq] = Transform.validate(r)
 
-  private def traceStreams(
-    s: AuthSession,
-    name: Option[String]
-  ): IO[List[(java.util.UUID, String)]] =
+  private def traceStreams(s: AuthSession, name: Option[String]): IO[List[(java.util.UUID, String)]] =
     visibleStreams(s, Some(StreamType.Traces), None).map(_.filter(x => name.forall(_ == x.name)).map(x =>
       x.id -> x.name
     ))
