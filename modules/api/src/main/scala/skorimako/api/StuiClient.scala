@@ -1,5 +1,6 @@
 package skorimako.api
 
+import sbirds.db.*
 import cats.effect.*
 import cats.syntax.all.*
 import io.circe.Json
@@ -95,7 +96,7 @@ final class StuiClient(cfg: Option[LinkService],
             case None => err(ErrorCode.StuiNotConfigured)
             case Some(c) =>
               val state = Crypto.randomToken(); val verifier = Crypto.randomToken(48)
-              val back = param(req, "returnTo").filter(localPath).getOrElse("/settings")
+              val back = sbirds.shared.SafePath.orElse(param(req, "returnTo"), "/settings")
               tokens.saveState(state, s.user.id, Provider, verifier, back, Instant.now().plusSeconds(600)) *>
                 found(Uri.unsafeFromString(c.url + "/oauth/authorize").withQueryParams(Map(
                   "response_type" -> "code",
@@ -115,33 +116,45 @@ final class StuiClient(cfg: Option[LinkService],
             tokens.takeState(state, Provider).flatMap {
               case None => found("/settings?integration=stui&result=expired")
               case Some((userId, verifier, back)) =>
-                param(req, "code") match {
-                  case None => found(s"$back?integration=stui&result=denied")
-                  case Some(code) =>
-                    val form = UrlForm(
-                      "grant_type" -> "authorization_code",
-                      "code" -> code,
-                      "redirect_uri" -> redirectUri,
-                      "code_verifier" -> verifier
-                    )
-                    val tr = Request[IO](
-                      Method.POST,
-                      Uri.unsafeFromString(c.apiUrl + "/oauth/token")
-                    ).withEntity(form).putHeaders(basic(c))
-                    http.expect[Json](tr).timeout(15.seconds).attempt.flatMap {
-                      case Right(j) =>
-                        j.hcursor.get[String]("access_token").toOption match {
-                          case Some(t) =>
-                            tokens.saveToken(userId, Provider, box.encrypt(t)) *>
-                              users.audit(Some(userId), "web", "integration.connect", Some(Provider), Json.obj()) *>
-                              found(s"$back?integration=stui&result=connected")
-                          case None => found(s"$back?integration=stui&result=error")
-                        }
-                      case Left(_) => found(s"$back?integration=stui&result=error")
-                    }
+                // 連携を始めた本人のブラウザーに戻ってきたときだけ受け取る
+                // （他人に state を踏ませて、その人の stui のトークンを自分に結び付けるのを防ぐ）
+                auth.fromRequest(req).map(_.exists(s => s.isSession && s.user.id == userId)).flatMap {
+                  case false => found("/settings?integration=stui&result=expired")
+                  case true => exchange(c, param(req, "code"), userId, verifier, back)
                 }
             }
           case _ => err(ErrorCode.StuiStateMissing)
+        }
+
+      private def exchange(c: LinkService,
+                           code: Option[String],
+                           userId: UUID,
+                           verifier: String,
+                           back: String): IO[Response[IO]] =
+        code match {
+          case None => found(s"$back?integration=stui&result=denied")
+          case Some(code) =>
+            val form = UrlForm(
+              "grant_type" -> "authorization_code",
+              "code" -> code,
+              "redirect_uri" -> redirectUri,
+              "code_verifier" -> verifier
+            )
+            val tr = Request[IO](
+              Method.POST,
+              Uri.unsafeFromString(c.apiUrl + "/oauth/token")
+            ).withEntity(form).putHeaders(basic(c))
+            http.expect[Json](tr).timeout(15.seconds).attempt.flatMap {
+              case Right(j) =>
+                j.hcursor.get[String]("access_token").toOption match {
+                  case Some(t) =>
+                    tokens.saveToken(userId, Provider, box.encrypt(t)) *>
+                      users.audit(Some(userId), "web", "integration.connect", Some(Provider), Json.obj()) *>
+                      found(s"$back?integration=stui&result=connected")
+                  case None => found(s"$back?integration=stui&result=error")
+                }
+              case Left(_) => found(s"$back?integration=stui&result=error")
+            }
         }
 
       private def deleteIntegrationsStuiConnection(req: Request[IO]): IO[Response[IO]] =

@@ -2,16 +2,18 @@ package skorimako.api
 
 import cats.effect.*
 import cats.syntax.all.*
+import fs2.{Chunk, Stream}
 import io.circe.{ACursor, Json}
-import io.circe.parser.parse
 import io.circe.syntax.*
 import org.http4s.*
 import org.http4s.circe.CirceEntityCodec.*
 import org.http4s.dsl.Http4sDsl
-import org.http4s.headers.{`WWW-Authenticate`, Allow, Authorization}
+import org.http4s.headers.Authorization
 import skorimako.core.*
 import skorimako.shared.*
 import sbirds.http.Errors
+import sbirds.mcp.{McpCaller, McpServer, McpTool}
+import sbirds.mcp.McpSchema.*
 
 /**
  * MCP（Model Context Protocol）のサーバー。POST /mcp に JSON-RPC を送る（Streamable HTTP。応答は JSON、SSE は使わない）。
@@ -20,107 +22,47 @@ import sbirds.http.Errors
 final class McpRoutes(api: HttpRoutes[IO], sessions: SessionAuth, publicUrl: String) extends Http4sDsl[IO] {
 
   private val base = publicUrl.stripSuffix("/")
-  private val Versions = List("2025-06-18", "2025-03-26", "2024-11-05")
 
-  val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
+  // JSON-RPC の枠（認証・振り分け・GET・DELETE /mcp の 405）は sbirds.mcp.McpServer。POST /mcp は全体の時間の上限を掛けてから枠へ渡す
+  lazy val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
     case req @ POST -> Root / "mcp" => postMcp(req)
-    case (GET | DELETE) -> Root / "mcp" => mcpMethodNotAllowed()
     case GET -> Root / "api" / "endpoints" => getEndpoints()
-  }
+  } <+> frame
 
+  private lazy val frame: HttpRoutes[IO] = McpServer.routes(host)
+
+  /**
+   * 枠に渡す前に、本文を 1 度だけ読んで何度でも読み直せる形にする（tools/call の数を枠より先に数えるため。読むのは認証のあと）。
+   * 要求の全体に時間の上限を掛ける。
+   */
   private def postMcp(req: Request[IO]): IO[Response[IO]] =
-    req.headers.get[Authorization] match {
-      case Some(auth @ Authorization(Credentials.Token(AuthScheme.Bearer, _))) =>
-        sessions.fromRequest(Request[IO](Method.GET, Uri.unsafeFromString("/mcp")).putHeaders(auth)).flatMap {
-          case None => unauthorized
-          case Some(session) if !session.canRead => Errors.respond(ErrorCode.ApiKeyIngestOnly)
-          case Some(session) =>
-            val call = Caller(auth)
-            req.as[Json].attempt.flatMap {
-              case Left(_) => BadRequest(rpcFail(Json.Null, -32700, "parse error"))
-              case Right(j) =>
-                j.asArray match {
-                  case Some(batch) if batch.size > 50 => BadRequest(rpcFail(Json.Null, -32600, "バッチは50件までです"))
-                  case Some(batch) => batch.toList.traverse(handle(call, session, _)).map(_.flatten).flatMap(rs =>
-                      if rs.isEmpty then Accepted() else Ok(rs.asJson)
-                    )
-                  case None => handle(call, session, j).flatMap(_.fold(Accepted())(Ok(_)))
-                }
-            }
-        }
-      case _ => unauthorized
+    req.body.compile.to(Chunk).memoize.flatMap { body =>
+      frame.run(req.withBodyStream(Stream.eval(body).flatMap(Stream.chunk))).getOrElseF(NotFound()).timeoutTo(
+        McpRoutes.Timeout,
+        ServiceUnavailable(McpServer.rpcFail(
+          Json.Null,
+          -32000,
+          s"時間内（${McpRoutes.Timeout.toSeconds}秒）に終わりませんでした"
+        ))
+      )
     }
-
-  private def mcpMethodNotAllowed(): IO[Response[IO]] =
-    MethodNotAllowed(Allow(Method.POST))
 
   private def getEndpoints(): IO[Response[IO]] =
     Ok(ApiCatalog.all.map(e =>
       Json.obj("method" -> e.method.asJson, "path" -> e.path.asJson, "description" -> e.description.asJson)
     ))
 
-  // ------------------------------------------------------------------ REST API の内部呼び出し
-
-  private final class Caller(auth: Authorization) {
-    def apply(method: Method, uri: Uri, body: Option[Json] = None): IO[Either[String, Json]] = {
-      val req0 = Request[IO](method, uri).putHeaders(auth, "X-Skorimako-Mcp" -> "1")
-      val req = body.fold(req0)(req0.withEntity(_))
-      api.run(req).value.flatMap {
-        case None => IO.pure(Left("404 見つかりません"))
-        case Some(r) =>
-          r.bodyText.compile.string.map { s =>
-            val j = if s.isEmpty then Json.Null else parse(s).getOrElse(Json.fromString(s))
-            if r.status.isSuccess then Right(j)
-            else Left(s"${r.status.code} ${j.hcursor.get[String]("error").getOrElse(r.status.reason)}")
-          }
-      }
-    }
-  }
-
-  private def path(segments: String*): Uri =
-    Uri(path = Uri.Path(segments.toVector.map(Uri.Path.Segment(_)), absolute = true))
-
   // ------------------------------------------------------------------ ツール
 
-  private type Result = IO[Either[String, String]]
+  private type Result = McpTool.Result
+  private type Caller = McpCaller
+  private type Tool = McpTool[Caller]
+  private def Tool(name: String, description: String, schema: Json, readOnly: Boolean, destructive: Boolean = false)(
+    run: (Caller, ACursor) => Result): Tool = McpTool(name, description, schema, readOnly, destructive)(run)
+  private def path(segments: String*): Uri = McpCaller.path(segments*)
 
-  private final case class Tool(name: String,
-                                description: String,
-                                schema: Json,
-                                readOnly: Boolean,
-                                destructive: Boolean = false)(val run: (Caller, ACursor) => Result) {
-    def json: Json = Json.obj(
-      "name" -> name.asJson,
-      "description" -> description.asJson,
-      "inputSchema" -> schema,
-      "annotations" -> Json.obj(
-        "readOnlyHint" -> readOnly.asJson,
-        "destructiveHint" -> destructive.asJson,
-        "openWorldHint" -> false.asJson
-      )
-    )
-  }
-
-  private def schema(required: List[String], props: (String, Json)*): Json =
-    Json.obj("type" -> "object".asJson, "properties" -> Json.obj(props*), "required" -> required.asJson)
-  private def str(d: String): Json = Json.obj("type" -> "string".asJson, "description" -> d.asJson)
-  private def int(d: String): Json = Json.obj("type" -> "integer".asJson, "description" -> d.asJson)
   private def num(d: String): Json = Json.obj("type" -> "number".asJson, "description" -> d.asJson)
-  private def bool(d: String): Json = Json.obj("type" -> "boolean".asJson, "description" -> d.asJson)
-  private def strs(d: String): Json =
-    Json.obj("type" -> "array".asJson, "items" -> Json.obj("type" -> "string".asJson), "description" -> d.asJson)
-  private def obj(d: String): Json = Json.obj("type" -> "object".asJson, "description" -> d.asJson)
-
-  private def need(a: ACursor, k: String): Either[String, String] =
-    a.get[String](k).toOption.map(_.trim).filter(_.nonEmpty).toRight(s"$k を指定してください")
   private def opt(a: ACursor, k: String): Option[String] = a.get[String](k).toOption.map(_.trim).filter(_.nonEmpty)
-
-  extension [A](e: Either[String, A]) {
-    private def withArgs(f: A => Result): Result = e.fold(err => IO.pure(Left(err)), f)
-  }
-  extension (r: IO[Either[String, Json]]) {
-    private def asText: Result = r.map(_.map(_.spaces2))
-  }
 
   private val timeProps: List[(String, Json)] = List(
     "minutes" -> int("直近の何分を対象にするか（既定60）"),
@@ -485,62 +427,68 @@ final class McpRoutes(api: HttpRoutes[IO], sessions: SessionAuth, publicUrl: Str
     }
   )
 
-  private val byName = tools.map(t => t.name -> t).toMap
+  // ------------------------------------------------------------------ JSON-RPC の枠に渡すもの
 
-  // ------------------------------------------------------------------ JSON-RPC
+  /** キーの持ち主と、この要求（バッチ）の tools/call が多すぎるか。 */
+  private final case class Who(session: AuthSession, tooManyCalls: Boolean)
 
-  private def ok(id: Json, result: Json): Json = Json.obj("jsonrpc" -> "2.0".asJson, "id" -> id, "result" -> result)
-  private def rpcFail(id: Json, code: Int, msg: String): Json =
-    Json.obj("jsonrpc" -> "2.0".asJson, "id" -> id, "error" -> Json.obj("code" -> code.asJson, "message" -> msg.asJson))
-  private def toolResult(r: Either[String, String]): Json =
-    Json.obj(
-      "content" -> Json.arr(Json.obj("type" -> "text".asJson, "text" -> r.merge.asJson)),
-      "isError" -> r.isLeft.asJson
+  private def isToolCall(msg: Json): Boolean = msg.hcursor.get[String]("method").contains("tools/call")
+
+  /** ツールの実行（検索など重い処理）は、1 回の要求で MaxBatchCalls 件まで。バッチ全体の上限（50 件）と読めない本文は枠が先に断る。 */
+  private def tooManyCalls(req: Request[IO]): IO[Boolean] =
+    req.as[Json].attempt.map(_.toOption.flatMap(_.asArray).exists(batch =>
+      batch.size <= MaxBatch && batch.count(isToolCall) > McpRoutes.MaxBatchCalls
+    ))
+
+  private val MaxBatch = 50
+
+  private lazy val host = new McpServer.Host[Who, Caller] {
+    val settings = McpServer.Settings(
+      "skorimako",
+      toolFailed = ErrorCode.McpToolFailed,
+      maxBatch = MaxBatch,
+      batchTooLarge = n => s"バッチは${n}件までです",
+      readOnlyDenied = "参照専用の APIキーでは変更できません",
+      hideDenied = false
     )
-
-  private def handle(call: Caller, s: AuthSession, msg: Json): IO[Option[Json]] = {
-    val c = msg.hcursor
-    val params = c.downField("params")
-    c.downField("id").focus match {
-      case None => IO.pure(None)
-      case Some(id) =>
-        c.get[String]("method").getOrElse("") match {
-          case "initialize" =>
-            val asked = params.get[String]("protocolVersion").toOption
-            IO.pure(Some(ok(
-              id,
-              Json.obj(
-                "protocolVersion" -> asked.filter(Versions.contains).getOrElse(Versions.head).asJson,
-                "capabilities" -> Json.obj("tools" -> Json.obj("listChanged" -> false.asJson)),
-                "serverInfo" -> Json.obj("name" -> "skorimako".asJson, "version" -> "0.1.0".asJson),
-                "instructions" ->
-                  ("skorimako（ログ・メトリクス・トレース・フロントエンドの観測データの基盤）を調べるツールです。" +
-                    "list_streams でデータの入れ物を、get_stream_schema で列を確かめ、search_logs・query_metrics・search_traces・get_trace で調べます。" +
-                    "集計は query_sql（DuckDB の SQL）で自由に書けます。アラートの状態は list_alerts・list_alert_events。" +
-                    "専用のツールがない操作は list_api_endpoints で REST API を調べ、call_api で行えます。権限はこの APIキーの持ち主と同じです。").asJson
-              )
-            )))
-          case "ping" => IO.pure(Some(ok(id, Json.obj())))
-          case "tools/list" => IO.pure(Some(ok(id, Json.obj("tools" -> tools.map(_.json).asJson))))
-          case "tools/call" =>
-            val name = params.get[String]("name").getOrElse("")
-            byName.get(name) match {
-              case None => IO.pure(Some(rpcFail(id, -32602, s"unknown tool: $name")))
-              case Some(t) if !s.canWrite && !t.readOnly =>
-                IO.pure(Some(ok(id, toolResult(Left("参照専用の APIキーでは変更できません")))))
-              case Some(t) =>
-                val args = params.downField("arguments").focus.filter(_.isObject).getOrElse(Json.obj()).hcursor
-                t.run(call, args).handleError(e => Left(s"内部エラー: ${e.getMessage}")).map(r =>
-                  Some(ok(id, toolResult(r)))
-                )
-            }
-          case "resources/list" => IO.pure(Some(ok(id, Json.obj("resources" -> Json.arr()))))
-          case "prompts/list" => IO.pure(Some(ok(id, Json.obj("prompts" -> Json.arr()))))
-          case other => IO.pure(Some(rpcFail(id, -32601, s"method not found: $other")))
-        }
-    }
+    val tools = McpRoutes.this.tools
+    def session(req: Request[IO], auth: Authorization) =
+      sessions.fromRequest(Request[IO](Method.GET, Uri.unsafeFromString("/mcp")).putHeaders(auth)).flatMap {
+        case Some(s) if s.canRead => tooManyCalls(req).map(many => Some(Who(s, many)))
+        case other => IO.pure(other.map(Who(_, tooManyCalls = false)))
+      }
+    def unauthorized = Errors.respond(ErrorCode.McpApiKeyRequired)
+    // 取り込み専用のキーでは使えない
+    override def refuse(w: Who) =
+      if !w.session.canRead then Some(Errors.respond(ErrorCode.ApiKeyIngestOnly))
+      else if w.tooManyCalls then
+        Some(BadRequest(McpServer.rpcFail(
+          Json.Null,
+          McpServer.InvalidRequest,
+          s"バッチの tools/call は${McpRoutes.MaxBatchCalls}件までです"
+        )))
+      else None
+    // MCP 経由の印は要求の属性で渡す（ヘッダーだと外からも付けられる）
+    def context(req: Request[IO], auth: Authorization, w: Who) =
+      new McpCaller(
+        api,
+        auth,
+        build = (m, u, b) => McpCaller.jsonRequest(m, u, b).withAttribute(SessionAuth.McpCall, ())
+      )
+    def canWrite(w: Who) = w.session.canWrite
+    def instructions(w: Who) =
+      "skorimako（ログ・メトリクス・トレース・フロントエンドの観測データの基盤）を調べるツールです。" +
+        "list_streams でデータの入れ物を、get_stream_schema で列を確かめ、search_logs・query_metrics・search_traces・get_trace で調べます。" +
+        "集計は query_sql（DuckDB の SQL）で自由に書けます。アラートの状態は list_alerts・list_alert_events。" +
+        "専用のツールがない操作は list_api_endpoints で REST API を調べ、call_api で行えます。権限はこの APIキーの持ち主と同じです。"
   }
+}
 
-  private def unauthorized: IO[Response[IO]] =
-    Errors.respond(ErrorCode.McpApiKeyRequired).map(_.putHeaders(`WWW-Authenticate`(Challenge("Bearer", "skorimako"))))
+object McpRoutes {
+
+  /** 1 回の要求（バッチ）で実行できる tools/call の数。 */
+  val MaxBatchCalls = 10
+
+  /** 1 回の要求の全体の上限。 */
+  val Timeout: scala.concurrent.duration.FiniteDuration = scala.concurrent.duration.DurationInt(120).seconds
 }

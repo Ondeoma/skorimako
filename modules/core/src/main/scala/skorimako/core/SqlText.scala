@@ -46,7 +46,8 @@ object SqlText {
       val c = sql(i)
       if c.isWhitespace then i += 1
       else if c == '-' && i + 1 < n && sql(i + 1) == '-' then
-        while i < n && sql(i) != '\n' do i += 1
+        // DuckDB は \r でも行のコメントを終える（\n だけで見ると、\r の後ろの SQL を見落とす）
+        while i < n && sql(i) != '\n' && sql(i) != '\r' do i += 1
       else if c == '/' && i + 1 < n && sql(i + 1) == '*' then {
         val e = sql.indexOf("*/", i + 2)
         if e < 0 then err = Some("コメント（/* */）が閉じていません") else i = e + 2

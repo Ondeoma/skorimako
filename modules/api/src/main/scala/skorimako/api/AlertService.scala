@@ -1,5 +1,6 @@
 package skorimako.api
 
+import sbirds.db.*
 import cats.effect.*
 import cats.syntax.all.*
 import io.circe.Json
@@ -12,6 +13,7 @@ import skorimako.auth.SecretBox
 import skorimako.core.*
 import skorimako.db.*
 import skorimako.engine.*
+import sbirds.net.NetGuard
 import sbirds.push.PushMessage
 import skorimako.shared.*
 
@@ -24,6 +26,7 @@ import scala.concurrent.duration.*
  * アラートの評価と通知。
  * 評価: 時刻が来たルールを全ノードが取り合い（次の評価の時刻を先に進めるので二重にしない）、直近 period の範囲で SQL を実行する。
  * 通知: 状態が変わったとき（発生・解消）と、発生中に沈黙の時間が過ぎたときに、通知先へ送る（送信待ちの表から再試行つきで）。
+ * http は利用者が決めた通知先へ送るクライアント（Main で NetGuard.client から作る。リダイレクトは追わない）。
  */
 final class AlertService(store: AlertStore,
                          engine: QueryEngine,
@@ -76,6 +79,9 @@ final class AlertService(store: AlertStore,
     )
   }
 
+  /** ルールの閲覧権限（対象のストリームを見られる人だけが見られる）。 */
+  val access: AlertAccess = new AlertAccess(store, engine)
+
   /** 評価する（通知はしない）。values はすべての値、hits は条件に当てはまったもの。 */
   def evaluate(r: AlertRuleReq,
                now: Instant,
@@ -95,25 +101,22 @@ final class AlertService(store: AlertStore,
     QueryBuilder.conditions(r.where, None, Nil).map(cs => QueryBuilder.absence(r.stream, r.groupBy, cs)) match {
       case Left(e) => IO.pure(Left(e))
       case Right(sql) =>
-        engine.acl.visible(viewer, r.streamType, r.stream).flatMap {
-          case false => IO.pure(Left(s"ストリーム ${r.stream} を見る権限がありません"))
-          case true =>
-            engine.session(r.streamType, List(r.stream), start, end, Prune.constraints(r.where))(_.query(
-              sql,
-              10000
-            )).map(_.map {
-              (res, _, _) =>
-                val names = res.columns.map(_.name)
-                val values = res.rows.map { row =>
-                  val m = names.zip(row).toMap
-                  val last = m.get("last").flatMap(_.asNumber).flatMap(_.toLong)
-                  // 最後の行からの分（なければ範囲の長さ）
-                  val mins = last.map(l => (end - l) / 60000000.0).getOrElse(look.toDouble)
-                  AlertHitDto(m.get("grp").map(QueryEngine.text), math.round(mins * 10) / 10.0)
-                }
-                (sql, values.filter(_.value >= r.periodMinutes), values)
-            })
-        }
+        // 見られないストリームは、ないストリームと同じ結果になる（engine.session が空のビューにする）
+        engine.session(viewer, r.streamType, List(r.stream), start, end, Prune.constraints(r.where))(_.query(
+          sql,
+          10000
+        )).map(_.map {
+          (res, _, _) =>
+            val names = res.columns.map(_.name)
+            val values = res.rows.map { row =>
+              val m = names.zip(row).toMap
+              val last = m.get("last").flatMap(_.asNumber).flatMap(_.toLong)
+              // 最後の行からの分（なければ範囲の長さ）
+              val mins = last.map(l => (end - l) / 60000000.0).getOrElse(look.toDouble)
+              AlertHitDto(m.get("grp").map(QueryEngine.text), math.round(mins * 10) / 10.0)
+            }
+            (sql, values.filter(_.value >= r.periodMinutes), values)
+        })
     }
   }
 
@@ -133,10 +136,10 @@ final class AlertService(store: AlertStore,
       case Left(e) => IO.pure(Left(e))
       case Right((sql, names)) =>
         engine.referenced(viewer, r.streamType, names.toSet).flatMap {
-          case Left(e) => IO.pure(Left(e))
-          case Right(Nil) => IO.pure(Left("SQL の FROM にストリームの名前を書いてください"))
-          case Right(ss) =>
+          case Nil => IO.pure(Left("SQL の FROM にストリームの名前を書いてください"))
+          case ss =>
             engine.session(
+              viewer,
               r.streamType,
               ss,
               start,
@@ -221,19 +224,7 @@ final class AlertService(store: AlertStore,
 
   /** 通知先が内部のネットワークでないか（WEBHOOK_DENY_PRIVATE=true のときだけ確かめる。stui は社内に置くことが多いため既定では許す）。 */
   def allowedHost(url: String): IO[Boolean] =
-    if !cfg.webhookDenyPrivate then IO.pure(true)
-    else
-      Uri.fromString(url).toOption.flatMap(_.host).map(_.value.stripPrefix("[").stripSuffix("]")) match {
-        case None => IO.pure(false)
-        case Some(h) =>
-          IO.blocking(java.net.InetAddress.getAllByName(h).toList).map(_.forall { a =>
-            val b = a.getAddress
-            val ula = b.length == 16 && (b(0) & 0xfe) == 0xfc
-            val cgnat = b.length == 4 && (b(0) & 0xff) == 100 && (b(1) & 0xc0) == 64
-            !(a.isLoopbackAddress || a.isSiteLocalAddress || a.isLinkLocalAddress || a.isAnyLocalAddress ||
-              a.isMulticastAddress || ula || cgnat)
-          }).handleError(_ => false)
-      }
+    if !cfg.webhookDenyPrivate then IO.pure(true) else NetGuard.isAllowed(url, NetGuard.Policy.publicOnly)
 
   private def ruleUrl(id: UUID): String = s"${cfg.publicUrl}/alerts/$id"
 
@@ -324,6 +315,8 @@ final class AlertService(store: AlertStore,
                 case Right(c) if c == 404 || c == 410 => OutboxResult.Skip(s"HTTP $c")
                 case Right(c) => OutboxResult.Retry(s"HTTP $c")
                 case Left(_: java.util.concurrent.TimeoutException) => OutboxResult.Retry("時間切れ")
+                // 確かめた後に名前の向き先が変わったとき（http は確かめた IP にそのままつなぐ）
+                case Left(_: NetGuard.Rejected) => OutboxResult.Skip("送信先が内部のネットワークのため送りませんでした")
                 case Left(_) => OutboxResult.Retry("接続できませんでした")
               }
           }

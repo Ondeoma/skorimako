@@ -8,6 +8,9 @@ object QueryBuilder {
 
   private val ts = ident(Columns.Timestamp)
 
+  /** メトリクスのラベルではない列（時刻・値・名前・種類）。 */
+  val notLabels: Set[String] = Set(Columns.Timestamp, "value", "__name__", "__type__")
+
   /** 区切りの長さ（マイクロ秒）。範囲をおよそ target 個に分ける、きりのよい長さ。 */
   def interval(start: Long, end: Long, target: Int = 60): Long = {
     val steps = List(

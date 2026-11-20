@@ -1,23 +1,20 @@
 package skorimako.app
 
+import sbirds.db.*
 import cats.effect.*
 import cats.syntax.all.*
 import com.comcast.ip4s.*
-import doobie.implicits.*
-import fs2.io.file.Path
 import org.http4s.*
-import org.http4s.dsl.io.*
 import org.http4s.ember.client.EmberClientBuilder
 import org.http4s.ember.server.EmberServerBuilder
-import org.http4s.server.staticcontent.*
 import skorimako.api.*
 import sbirds.auth.{OidcClient, OidcConfig}
 import skorimako.auth.SecretBox
 import skorimako.db.*
 import skorimako.engine.*
 import skorimako.core.ErrorCode
-import sbirds.http.Errors
-import sbirds.shared.AppError
+import sbirds.http.{Errors, Health, Spa}
+import sbirds.net.NetGuard
 import skorimako.storage.{LocalObjectStore, ObjectStore, S3Config, S3ObjectStore}
 
 import java.nio.file.Paths
@@ -51,8 +48,11 @@ object Main extends IOApp.Simple {
       n <- migrateWithRetry(cfg)
       _ <- sbirds.observe.Log.println(s"[skorimako] database migrated ($n migration(s) applied); node ${cfg.nodeId}")
       _ <- (for {
-        xa <- Database.transactor(cfg.db)
+        // skorimako は観測の受け口なので、SQL ごとのトレースは残さない
+        xa <- Database.transactor(cfg.db, telemetry = false)
         http <- EmberClientBuilder.default[IO].withTimeout(30.seconds).build
+        // 利用者が決めた宛先（アラートの通知先）へ送るクライアント. WEBHOOK_DENY_PRIVATE=true なら、確かめた IP にそのままつなぐ
+        hookHttp <- NetGuard.client(NetGuard.Policy.of(!cfg.api.webhookDenyPrivate))
         users = new UserStore(xa)
         streams = new StreamStore(xa)
         alerts = new AlertStore(xa)
@@ -90,7 +90,7 @@ object Main extends IOApp.Simple {
           cfg.api.publicUrl,
           r => IO(stats.inc("skorimako_push_sent_total", Map("result" -> r)))
         ))
-        alertSvc = new AlertService(alerts, engine, http, box, cfg.api, stuiCli, stats, push)
+        alertSvc = new AlertService(alerts, engine, hookHttp, box, cfg.api, stuiCli, stats, push)
         selfMon = new SelfMonitor(ingest, stats, apps, streams, lock, cfg.nodeId)
         _ <- Resource.eval(startupNotes(cfg))
         _ <- Resource.eval(IO.whenA(cfg.selfMonitor)(selfMon.ensureDashboard.handleErrorWith(e =>
@@ -102,6 +102,7 @@ object Main extends IOApp.Simple {
           alertSvc.deliveryLoop,
           maint.compactLoop,
           maint.retentionLoop,
+          maint.purgeLoop,
           maint.cacheLoop,
           purgeLoop(users, alerts, lock),
           transform.loop
@@ -112,7 +113,7 @@ object Main extends IOApp.Simple {
           GrpcIngest.resource(cfg.api.grpcPort, ingest, sess, cfg.api.maxIngestBytes.toInt)
         else Resource.unit[IO]
         rest =
-          healthRoutes(xa, cfg.nodeId) <+>
+          Health.routes(Database.isPrimary(xa), s"ok ${cfg.nodeId}", errorDetail = true) <+>
             new AuthRoutes(oidc, users, sess, cfg.api).routes <+>
             new UserRoutes(users, sess).routes <+>
             ingestRoutes.routes <+>
@@ -120,10 +121,10 @@ object Main extends IOApp.Simple {
             new DataRoutes(streams, alerts, engine, ingester, transform, objects, users, sess, cfg.api).routes <+>
             new AlertRoutes(alerts, alertSvc, users, box, sess, acl).routes <+>
             new AppRoutes(apps, streams, users, sess).routes <+>
-            new OAuthRoutes(new OAuthStore(xa), users, sess, cfg.api).routes <+>
+            new OAuthRoutes(new sbirds.oauth.OAuthKeyStore(xa, revokeOnReuse = true), users, sess, cfg.api).routes <+>
             stuiCli.routes(sess, users) <+>
-            new LinkRoutes(streams, alerts, apps, acl, sess, cfg.api).routes <+>
-            new PushRoutes(pushStore, push, sess).routes <+>
+            new LinkRoutes(streams, alertSvc.access, apps, acl, sess, cfg.api).routes <+>
+            new PushRoutes(pushStore, push.publicKey, sess).routes <+>
             peers.routes
         app = rest <+> new McpRoutes(rest, sess, cfg.api.publicUrl).routes
         all = cfg.staticDir.fold(app)(d => app <+> spa(d))
@@ -132,7 +133,10 @@ object Main extends IOApp.Simple {
           .withPort(Port.fromInt(cfg.port).getOrElse(port"8080"))
           .withShutdownTimeout(5.seconds)
           .withMaxHeaderSize(64 * 1024)
-          .withHttpApp(Errors.handle(tooLarge(Guards(all, cfg.api).orNotFound), ErrorCode.Unexpected))
+          .withHttpApp(Errors.handle(
+            Guards(RateLimit(all, cfg.api.rateLimit), cfg.api).orNotFound,
+            ErrorCode.Unexpected
+          ))
           .build
         _ <- Resource.eval(sbirds.observe.Log.println(s"[skorimako] listening on :${cfg.port} (${cfg.api.publicUrl})"))
       } yield ()).useForever
@@ -157,30 +161,10 @@ object Main extends IOApp.Simple {
         .as(new LocalObjectStore(dir)))
   }
 
-  /** ロードバランサー用のヘルスチェック。DB（プライマリ）に書けない状態なら 503。 */
-  private def healthRoutes(xa: doobie.Transactor[IO], node: String): HttpRoutes[IO] = HttpRoutes.of[IO] {
-    case GET -> Root / "healthz" =>
-      sql"select not pg_is_in_recovery()".query[Boolean].unique.transact(xa).timeout(3.seconds).attempt.flatMap {
-        case Right(true) => text(Status.Ok, s"ok $node")
-        case Right(false) => text(Status.ServiceUnavailable, "database is read-only (not primary)")
-        case Left(e) => text(Status.ServiceUnavailable, s"database unavailable: ${e.getMessage}")
-      }
-  }
-
-  private def text(status: Status, body: String): IO[Response[IO]] =
-    IO.pure(Response[IO](status).withEntity(body)(using EntityEncoder.stringEncoder))
-
   private def startupNotes(cfg: AppConfig): IO[Unit] =
     IO.whenA(
       cfg.oidc.isEmpty
     )(sbirds.observe.Log.println("[skorimako] WARNING: OIDC が未設定です。開発用のログイン（DEV_LOGIN）を使います。本番では使わないでください"))
-
-  /** 本文の上限（Guards の EntityLimiter）を超えたら 413. */
-  private def tooLarge(app: HttpApp[IO]): HttpApp[IO] = HttpApp[IO](req =>
-    app.run(req).adaptError { case _: org.http4s.server.middleware.EntityLimiter.EntityTooLarge =>
-      AppError(ErrorCode.RequestTooLarge)
-    }
-  )
 
   /** 期限切れのセッション・古い監査ログ・アラートの履歴と送信の記録を消す（1ノードだけ）。 */
   private def purgeLoop(users: UserStore, alerts: AlertStore, lock: JobLock): IO[Unit] =
@@ -189,33 +173,19 @@ object Main extends IOApp.Simple {
         alerts.purgeDeliveries(30).void
     ))
 
-  /** ビルド済みの画面の配信。存在しないパスは index.html（SPA）。 */
-  private def spa(dir: String): HttpRoutes[IO] = {
-    val files = fileService[IO](FileService.Config(dir))
-    val index = HttpRoutes.of[IO] {
-      case req @ GET -> _
-          if !Set("api", "auth", "mcp", "v1", "rum/", "oauth", "internal").exists(p =>
-            req.pathInfo.renderString.startsWith("/" + p)
-          ) =>
-        StaticFile.fromPath(Path(dir) / "index.html", Some(req)).getOrElseF(Errors.respond(ErrorCode.PageNotFound))
-    }
-    HttpRoutes[IO] { req =>
-      val p = req.pathInfo.renderString
-      val cc = if p.startsWith("/assets/") then "public, max-age=31536000, immutable"
-      else if p == "/rum.js" then "public, max-age=3600" else "no-cache"
-      // /rum.js はほかのサイトから読み込まれる
-      (files <+> index).run(req).map(r =>
-        r.putHeaders("Cache-Control" -> cc) |>
-          (x =>
-            if p == "/rum.js" then
-              x.putHeaders("Access-Control-Allow-Origin" -> "*", "Cross-Origin-Resource-Policy" -> "cross-origin")
-            else x
+  /** ビルド済みの画面の配信。存在しないパスは index.html（SPA）。/rum.js はほかのサイトから読み込まれる。 */
+  private def spa(dir: String): HttpRoutes[IO] =
+    Spa.routes(
+      dir,
+      Spa.startsWith("api", "auth", "mcp", "v1", "rum/", "oauth", "internal"),
+      Errors.respond(ErrorCode.PageNotFound),
+      (req, r) =>
+        if req.pathInfo.renderString == "/rum.js" then
+          r.putHeaders(
+            "Cache-Control" -> "public, max-age=3600",
+            "Access-Control-Allow-Origin" -> "*",
+            "Cross-Origin-Resource-Policy" -> "cross-origin"
           )
-      )
-    }
-  }
-
-  extension [A](a: A) {
-    private def |>[B](f: A => B): B = f(a)
-  }
+        else r
+    )
 }

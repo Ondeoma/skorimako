@@ -133,9 +133,12 @@ service:
 | `RETENTION_DAYS` | 30 | 保持期間の既定（ストリームごとに変えられる） |
 | `DUCKDB_MEMORY`・`DUCKDB_THREADS` | 2GB・4 | 1回の検索の DuckDB のメモリとスレッド |
 | `QUERY_CONCURRENCY` | 4 | ノードごとの同時の検索の数 |
+| `QUERY_PER_USER` | 2 | 1人の利用者（APIキーを含む）がノードごとに同時に動かせる検索の数。超えた分は順番を待つ（アラートの評価などサーバーの中の処理は対象外） |
 | `QUERY_TIMEOUT_SECONDS` | 60 | 1回の検索の上限 |
 | `CACHE_MAX_GB` | 10 | 検索のキャッシュの上限 |
 | `WEBHOOK_DENY_PRIVATE` | false | アラートの通知先にプライベートの IP を許さない |
+| `RATE_LIMIT_AUTH`・`RATE_LIMIT_PUBLIC` | 20・120 | IP ごとの1分あたりの回数の上限。ログインと OAuth の認可の画面（`/auth/…`・`/oauth/authorize`）と、OAuth のトークンの発行・失効（`/oauth/token`・`/oauth/revoke`）。0 で制限しない。ノードごとに数える。観測データの取り込み（`/v1/…`・`/rum/…`・`/api/ingest/…`・remote write）と、ログインした人・APIキーの API は数えない |
+| `TRUSTED_PROXIES` | | リバースプロキシの IP か CIDR（カンマ区切り）。そこから来た要求だけ `X-Forwarded-For` から利用者の IP を読む。リバースプロキシの後ろに置くときは必ず設定する（未設定だと全員がプロキシの IP として数えられ、上限にすぐ達する） |
 | `TIMEZONE` | Asia/Tokyo | |
 | `STATIC_DIR` | | 画面（`dist/static`）を配信する |
 

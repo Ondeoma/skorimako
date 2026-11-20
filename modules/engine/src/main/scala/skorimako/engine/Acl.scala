@@ -5,8 +5,11 @@ import skorimako.db.StreamStore
 
 import scala.concurrent.duration.*
 
-/** 検索する人。admin はシステム管理者（すべてのストリームを見られる）、groups は IdP のグループ。 */
-final case class Viewer(admin: Boolean, groups: Set[String])
+/**
+ * 検索する人。admin はシステム管理者（すべてのストリームを見られる）、groups は IdP のグループ。
+ * key は利用者ごとの検索の同時実行の上限の単位（ユーザーの ID）。None はサーバーの中の処理（上限の対象外）。
+ */
+final case class Viewer(admin: Boolean, groups: Set[String], key: Option[String] = None)
 
 object Viewer {
 
@@ -41,6 +44,10 @@ final class Acl private (store: StreamStore, cache: Ref[IO, (Long, Map[(String, 
   def filter[A](v: Viewer, streamType: String, xs: List[A])(name: A => String): IO[List[A]] =
     if v.admin then IO.pure(xs)
     else table.map(t => xs.filter(x => t.get((streamType, name(x))).forall(_.exists(v.groups.contains))))
+
+  /** その人が見られないストリーム（種類, 名前）。 */
+  def hidden(v: Viewer): IO[List[(String, String)]] =
+    if v.admin then IO.pure(Nil) else table.map(_.collect { case (k, gs) if !gs.exists(v.groups.contains) => k }.toList)
 
   def filterTyped[A](v: Viewer, xs: List[A])(key: A => (String, String)): IO[List[A]] =
     if v.admin then IO.pure(xs) else table.map(t => xs.filter(x => t.get(key(x)).forall(_.exists(v.groups.contains))))

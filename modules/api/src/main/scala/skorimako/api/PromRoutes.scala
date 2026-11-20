@@ -194,7 +194,8 @@ final class PromRoutes(ingest: IngestService,
 
   /** PromQL を評価する（start・end・step はミリ秒。step が 0 なら時刻 end の問い合わせ）。 */
   def evaluate(v: Viewer, q: String, start: Long, end: Long, stepMs: Long): IO[Either[String, Prom.Result]] =
-    PromQL.parse(q) match {
+    (if q.length > PromRoutes.MaxQueryLength then Left(s"式が長すぎます（${PromRoutes.MaxQueryLength} 文字まで）")
+     else PromQL.parse(q)) match {
       case Left(e) => IO.pure(Left(e))
       case Right(expr) =>
         if stepMs > 0 && (end - start) / stepMs > 11000 then IO.pure(Left("点が多すぎます（11000 まで）。step を大きくしてください"))
@@ -203,11 +204,11 @@ final class PromRoutes(ingest: IngestService,
             case Left(e) => IO.pure(Left(e))
             case Right(data) =>
               IO.blocking(if stepMs > 0 then Prom.range(expr, data, start, end, stepMs)
-              else Prom.instant(expr, data, end)).attempt.map {
-                case Right(r) => Right(r)
-                case Left(e: QueryError) => Left(e.message)
-                case Left(e) =>
-                  Left(s"評価できませんでした: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName).take(200)}")
+              else Prom.instant(expr, data, end)).attempt.flatMap {
+                case Right(r) => IO.pure(Right(r))
+                case Left(e: QueryError) => IO.pure(Left(e.message))
+                // 予期しない失敗の中身はログにだけ出す
+                case Left(e) => QueryEngine.internal(ErrorCode.PromEvalFailed, e).map(Left(_))
               }
           }
     }
@@ -234,4 +235,10 @@ final class PromRoutes(ingest: IngestService,
         }
     }
 
+}
+
+object PromRoutes {
+
+  /** PromQL の式の長さの上限（文字）。 */
+  val MaxQueryLength = 10000
 }

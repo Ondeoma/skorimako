@@ -1,5 +1,6 @@
 package skorimako.db
 
+import sbirds.db.*
 import cats.effect.*
 import cats.syntax.all.*
 import doobie.*
@@ -277,6 +278,10 @@ final class AlertStore(xa: Transactor[IO]) extends TxStore(xa) {
       .update.run).as(id)
   }
 
+  /** ミュートを作った人（ミュートがなければ None。作った人が消えていれば Some(None)）。 */
+  def silenceOwner(id: UUID): IO[Option[Option[UUID]]] =
+    tx(sql"select created_by from alert_silence where id = $id".query[Option[UUID]].option)
+
   /** 終わらせる（今で切る。始まる前なら消す）。 */
   def endSilence(id: UUID): IO[Boolean] =
     tx(sql"delete from alert_silence where id = $id and starts_at > now()".update.run.flatMap(n =>
@@ -284,9 +289,12 @@ final class AlertStore(xa: Transactor[IO]) extends TxStore(xa) {
       else sql"update alert_silence set ends_at = now() where id = $id and ends_at > now()".update.run.map(_ > 0)
     ))
 
-  def events(ruleId: Option[UUID], limit: Int): IO[List[AlertEventDto]] = tx(
+  /** 履歴。only があれば、そのルールのものだけ（その人が見られるルール）。 */
+  def events(ruleId: Option[UUID], limit: Int, only: Option[Set[UUID]] = None): IO[List[AlertEventDto]] = tx(
     (fr"""select e.id, e.rule_id, r.name, e.state, e.value, e.hits, e.message, e.at, e.silenced from alert_event e join alert_rule r on r.id = e.rule_id""" ++
-      Sql.whereAnd(ruleId.map(id => fr"e.rule_id = $id").toList) ++ fr"order by e.at desc limit $limit")
+      Sql.whereAnd(
+        ruleId.map(id => fr"e.rule_id = $id").toList ++ only.map(ids => fr"e.rule_id = any(${ids.toArray})").toList
+      ) ++ fr"order by e.at desc limit $limit")
       .query[(UUID, UUID, String, String, Option[Double], Json, String, Instant, Boolean)]
       .map((id, rid, n, s, v, h, m, at, si) =>
         AlertEventDto(id, rid, n, s, v, h.as[List[AlertHitDto]].getOrElse(Nil), m, at, si)

@@ -1,5 +1,6 @@
 package skorimako.db
 
+import sbirds.db.*
 import cats.effect.*
 import cats.syntax.all.*
 import doobie.*
@@ -31,6 +32,25 @@ final case class FileRow(id: Long,
                          size: Long,
                          level: Int,
                          tags: Map[String, List[String]] = Map.empty)
+
+/** 圧縮の束ね方（DB を使わない部分）。 */
+object Compaction {
+  val HourMicros = 3600000000L
+
+  /**
+   * ファイルをストリーム・時間ごとに束ね、まとめた結果が maxBytes・maxFiles を超えないところまでにする（古い順）。
+   * 2 つに満たない束は捨てる。ファイルの多い束から並べる。
+   */
+  def groups(files: List[FileRow], maxBytes: Long, maxFiles: Int): List[List[FileRow]] =
+    files.groupBy(f => (f.streamId, f.minTs / HourMicros)).values.toList
+      .map { g =>
+        g.sortBy(f => (f.minTs, f.id)).foldLeft((List.empty[FileRow], 0L)) { case ((acc, total), f) =>
+          if acc.size >= maxFiles || total + f.size > maxBytes then (acc, total) else (f :: acc, total + f.size)
+        }._1.reverse
+      }
+      .filter(_.size >= 2)
+      .sortBy(g => -g.size)
+}
 
 /** 取り込んだファイルの登録の内容。 */
 final case class NewFile(streamId: UUID,
@@ -211,24 +231,37 @@ final class StreamStore(xa: Transactor[IO]) extends TxStore(xa) {
             order by min_ts""".query[(Long, UUID, String, Long, Long, Long, Long, Int, Json)].map(fileRow).to[List]
       )
 
-  /** 圧縮の候補: 書いてから minAge 秒たった小さいファイルを、ストリーム・時間（hourMicros ごと）で束ねる。 */
-  def compactionGroups(minAgeSeconds: Int, maxBytes: Long, limit: Int): IO[List[List[FileRow]]] = tx(
-    sql"""select id, stream_id, s3_key, min_ts, max_ts, row_count, size_bytes, level, tags from data_file
-          where deleted_at is null and size_bytes < $maxBytes and created_at < now() - make_interval(secs => $minAgeSeconds)
-          order by stream_id, min_ts limit 20000""".query[(Long, UUID, String, Long, Long, Long, Long, Int, Json)].map(
-      fileRow
-    ).to[List]
-  ).map { fs =>
-    fs.groupBy(f => (f.streamId, f.minTs / 3600000000L)).values.toList
-      .filter(_.size >= 2)
-      .map { g =>
-        // まとめた結果が maxBytes を超えないところまで
-        g.sortBy(_.minTs).foldLeft((List.empty[FileRow], 0L)) { case ((acc, total), f) =>
-          if total + f.size > maxBytes then (acc, total) else (f :: acc, total + f.size)
-        }._1.reverse
-      }
-      .filter(_.size >= 2)
-      .take(limit)
+  /**
+   * 圧縮の候補を、ファイルの多い束から limit 束まで選ぶ。束はストリーム・時間（1時間ごと）。
+   *   - 終わった時間（その時間の終わりから closeGraceSeconds たった）: 小さいファイルが 2 つ以上あれば、すべてを 1 つにまとめる。
+   *   - まだ続いている時間: 取り込んだままのファイル（レベル 0）が openMinFiles 個たまったら、それだけをまとめる
+   *     （まとめた結果を、新しいファイルが来るたびにまとめ直さないように）。
+   * 束は SQL で選ぶ（先頭の何件かだけを読んで束ねると、後ろのストリームの番が来ない）。
+   */
+  def compactionGroups(minAgeSeconds: Int,
+                       maxBytes: Long,
+                       limit: Int,
+                       nowMicros: Long,
+                       closeGraceSeconds: Int = 900,
+                       openMinFiles: Int = 60,
+                       maxFiles: Int = 1000): IO[List[List[FileRow]]] = {
+    // 時間の番号（group by と同じ式にするため、定数は SQL に直接書く）
+    val hour = Fragment.const(s"(min_ts / ${Compaction.HourMicros})")
+    val closedBefore = (nowMicros - closeGraceSeconds.toLong * 1000000L) / Compaction.HourMicros // これより前の時間は終わっている
+    val candidate =
+      fr"deleted_at is null and size_bytes < $maxBytes and created_at < now() - make_interval(secs => $minAgeSeconds)"
+    tx(
+      (fr"with picked as (select stream_id," ++ hour ++ fr"as hour, bool_and(" ++ hour ++
+        fr"< $closedBefore) as closed" ++
+        fr"from data_file where" ++ candidate ++ fr"group by stream_id," ++ hour ++
+        fr"having (bool_and(" ++ hour ++ fr"< $closedBefore) and count(*) >= 2)" ++
+        fr"or count(*) filter (where level = 0) >= $openMinFiles" ++
+        fr"order by count(*) desc limit $limit)" ++
+        fr"""select f.id, f.stream_id, f.s3_key, f.min_ts, f.max_ts, f.row_count, f.size_bytes, f.level, f.tags
+             from data_file f join picked p on p.stream_id = f.stream_id and p.hour =""" ++ hour ++
+        fr"where (p.closed or f.level = 0) and" ++ candidate)
+        .query[(Long, UUID, String, Long, Long, Long, Long, Int, Json)].map(fileRow).to[List]
+    ).map(Compaction.groups(_, maxBytes, maxFiles))
   }
 
   /** 圧縮したファイルに置き換える（元のファイルには削除の印を付ける。すでに消えていたら何もしない）。 */
@@ -422,10 +455,15 @@ final class StreamStore(xa: Transactor[IO]) extends TxStore(xa) {
           where f.stream_id = $streamId and f.deleted_at is null order by v limit $limit""".query[String].to[List]
   )
 
-  /** データを送ってきたサービスの名前（ログ・メトリクス・トレースの書き出したファイルの service_name）。画面のサービスの絞り込みに使う。 */
-  def serviceNames: IO[List[String]] = tx(
+  /**
+   * データを送ってきたサービスの名前（ログ・メトリクス・トレースの書き出したファイルの service_name）。画面のサービスの絞り込みに使う。
+   * hidden はその人が見られないストリーム（種類, 名前）。そのストリームにだけ出てくる名前は返さない。
+   */
+  def serviceNames(hidden: List[(String, String)] = Nil): IO[List[String]] = tx(
     sql"""select distinct v from data_file f join stream s on s.id = f.stream_id, jsonb_array_elements_text(f.tags -> 'service_name') v
-          where f.deleted_at is null and s.stream_type <> 'rum' order by v limit 500""".query[String].to[List]
+          where f.deleted_at is null and s.stream_type <> 'rum'
+            and (s.stream_type || '/' || s.name) <> all(${hidden.map((t, n) => s"$t/$n").toArray})
+          order by v limit 500""".query[String].to[List]
   )
 
   /** その種類のすべてのストリームの列の名前。 */

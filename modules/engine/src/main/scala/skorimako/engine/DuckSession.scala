@@ -2,7 +2,7 @@ package skorimako.engine
 
 import io.circe.Json
 import skorimako.core.*
-import skorimako.core.SqlText.{ident, lit}
+import skorimako.core.SqlText.ident
 import skorimako.shared.*
 
 import java.nio.file.Path
@@ -10,7 +10,7 @@ import java.sql.{Connection, ResultSet, Statement}
 
 /**
  * 1回の検索のための DuckDB の接続。ストリームを同じ名前のビュー（時間の範囲で絞ったもの）として作ってから、
- * 外部のファイルへのアクセスを閉じ（キャッシュのディレクトリだけ許す）、設定を固定する。
+ * 外部のファイルへのアクセスを閉じ（ビューが読むファイルだけ許す）、設定を固定する。
  */
 final class DuckSession private (val conn: Connection) {
   @volatile private var current: Option[Statement] = None
@@ -73,7 +73,7 @@ object DuckSession {
   /** 1つのストリームのビュー。files は手元のキャッシュのパス、fields は登録済みの列（ファイルがない列も null で見えるように）。 */
   final case class View(name: String, files: Seq[Path], fields: List[FieldDto])
 
-  def open(cfg: DuckConfig, views: List[View], start: Long, end: Long, allowedDirs: List[Path]): DuckSession = {
+  def open(cfg: DuckConfig, views: List[View], start: Long, end: Long): DuckSession = {
     val c = Duck.open(cfg, stream = true)
     try {
       val s = c.createStatement()
@@ -92,8 +92,9 @@ object DuckSession {
                  |WHERE $ts >= $start AND $ts <= $end""".stripMargin
           s.execute(s"CREATE VIEW ${ident(v.name)} AS $body")
         }
-        // ここから先は利用者の SQL。キャッシュの外のファイル・ネットワークには触れさせない
-        s.execute(s"SET allowed_directories = ${allowedDirs.map(d => lit(d.toString + "/")).mkString("[", ", ", "]")}")
+        // ここから先は利用者の SQL。ビューが読むファイルのほかには触れさせない
+        // （キャッシュのディレクトリごと許すと、read_parquet で見る権限のないストリームのファイルまで読めてしまう）
+        s.execute(s"SET allowed_paths = ${Duck.pathList(views.flatMap(_.files).distinct)}")
         s.execute("SET enable_external_access = false")
         s.execute("SET lock_configuration = true")
       } finally s.close()

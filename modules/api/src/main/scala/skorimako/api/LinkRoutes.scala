@@ -18,7 +18,7 @@ import java.util.UUID
  * 対応: /traces/{id}・/alerts/{id}・/dashboards/{id}・/logs?stream=…&where=…・/metrics?metric=…。見られないものは返さない。
  */
 final class LinkRoutes(streams: StreamStore,
-                       alerts: AlertStore,
+                       alerts: AlertAccess,
                        apps: AppStore,
                        acl: Acl,
                        val sessions: SessionAuth,
@@ -80,17 +80,14 @@ final class LinkRoutes(streams: StreamStore,
                 }
             }).map(_.flatten)
           case "alerts" :: id :: Nil =>
-            uuidOpt(id).flatTraverse(alerts.rule).flatMap(_.flatTraverse { r =>
-              acl.visible(s.viewer, r.streamType, r.stream).map(ok =>
-                Option.when(ok || r.mode == AlertMode.Sql)(
-                  LinkInfoDto(
-                    url,
-                    "alert",
-                    r.name,
-                    s"${AlertState.label(r.state)}・値 ${r.lastValue.map(AlertLogic.fmt).getOrElse("-")}",
-                    Some(r.state)
-                  )
-                )
+            // 見られるルールだけ（SQL のルールは、SQL が参照するストリームをすべて見られる人だけ）
+            uuidOpt(id).flatTraverse(alerts.rule(s.viewer, _)).map(_.map { r =>
+              LinkInfoDto(
+                url,
+                "alert",
+                r.name,
+                s"${AlertState.label(r.state)}・値 ${r.lastValue.map(AlertLogic.fmt).getOrElse("-")}",
+                Some(r.state)
               )
             })
           case "dashboards" :: id :: Nil =>

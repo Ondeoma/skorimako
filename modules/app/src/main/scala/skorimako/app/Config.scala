@@ -1,10 +1,11 @@
 package skorimako.app
 
+import sbirds.http.Env.*
+import sbirds.db.*
 import cats.effect.*
 import cats.syntax.all.*
 import skorimako.api.*
 import sbirds.auth.OidcConfig
-import skorimako.db.*
 import skorimako.engine.*
 import skorimako.storage.S3Config
 
@@ -13,37 +14,6 @@ import scala.concurrent.duration.*
 
 /** 設定は環境変数から読む。 */
 object Config {
-  private def opt(name: String): Option[String] = sys.env.get(name).map(_.trim).filter(_.nonEmpty)
-  private def int(name: String): Option[Int] = opt(name).flatMap(_.toIntOption)
-  private def enabled(name: String): Boolean = opt(name).exists(_.equalsIgnoreCase("true"))
-  private def required(name: String): Either[String, String] = opt(name).toRight(s"環境変数 $name を設定してください")
-
-  /** OAUTH_CLIENTS: [{"id":"stui","secret":"…","redirectUri":"https://…/callback","name":"stui","scopes":["read"]}] */
-  private def oauthClients: Either[String, List[OAuthClient]] =
-    opt("OAUTH_CLIENTS").fold(Right(Nil)) { s =>
-      io.circe.parser.parse(s).flatMap(_.as[List[io.circe.Json]]).left.map(_ =>
-        "OAUTH_CLIENTS は JSON の配列で指定してください"
-      ).flatMap(_.traverse { j =>
-        val c = j.hcursor
-        (c.get[String]("id"), c.get[String]("secret"), c.get[String]("redirectUri")).tupled.toOption
-          .filter((id, sec, uri) =>
-            id.nonEmpty && sec.length >= 16 && (uri.startsWith("https://") || uri.startsWith("http://localhost"))
-          )
-          .map((id, sec, uri) =>
-            OAuthClient(
-              id,
-              sec,
-              uri,
-              c.get[String]("name").getOrElse(id),
-              c.get[List[String]]("scopes").toOption.map(_.filter(Set(
-                "read",
-                "write"
-              ))).filter(_.nonEmpty).getOrElse(List("read"))
-            )
-          )
-          .toRight("OAUTH_CLIENTS の各要素には id・secret（16文字以上）・redirectUri（https://）を指定してください")
-      })
-    }
 
   def load: IO[AppConfig] = IO.fromEither(
     (for {
@@ -78,7 +48,9 @@ object Config {
         (),
         "S3_ENDPOINT（S3 互換ストレージ）か STORAGE_DIR（1台だけで動かすときのローカルのディレクトリ）を設定してください"
       )
-      clients <- oauthClients
+      clients <- sbirds.oauth.OAuthClient.fromEnv()
+      // RATE_LIMIT_AUTH・RATE_LIMIT_PUBLIC（IP ごとの1分あたりの回数. 0 で制限しない）・TRUSTED_PROXIES
+      rate <- sbirds.http.RateLimitConfig.fromEnv()
     } yield {
       val base = pub.stripSuffix("/")
       val dataDir = Paths.get(opt("DATA_DIR").getOrElse("data")).toAbsolutePath.normalize()
@@ -103,6 +75,7 @@ object Config {
           maxIngestBytes = int("MAX_INGEST_MB").getOrElse(32).toLong * 1024 * 1024,
           webhookDenyPrivate = enabled("WEBHOOK_DENY_PRIVATE"),
           oauthClients = clients,
+          rateLimit = rate,
           // STUI_URL・STUI_CLIENT_ID・STUI_CLIENT_SECRET（STUI_INTERNAL_URL はサーバーから呼ぶ URL）
           stui = (opt("STUI_URL"), opt("STUI_CLIENT_ID"), opt("STUI_CLIENT_SECRET")).mapN((u, id, sec) =>
             LinkService("stui", u.stripSuffix("/"), id, sec, opt("STUI_INTERNAL_URL").map(_.stripSuffix("/")))
@@ -138,10 +111,12 @@ object Config {
           dataDir.resolve("cache"),
           int("CACHE_MAX_GB").getOrElse(10).toLong << 30,
           int("QUERY_TIMEOUT_SECONDS").getOrElse(60).seconds,
-          int("QUERY_CONCURRENCY").getOrElse(4)
+          int("QUERY_CONCURRENCY").getOrElse(4),
+          int("QUERY_PER_USER").getOrElse(2)
         ),
         duck = duck,
-        maintenance = MaintenanceConfig(retention),
+        maintenance =
+          MaintenanceConfig(retention, compactParallel = int("COMPACT_PARALLEL").filter(_ > 0).getOrElse(3)),
         nodeUrl = opt("NODE_URL").map(_.stripSuffix("/")),
         selfMonitor = !opt("SELF_MONITOR").contains("false")
       )

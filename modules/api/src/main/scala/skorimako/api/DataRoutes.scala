@@ -55,7 +55,12 @@ final class DataRoutes(streams: StreamStore,
 
   private def getOverview(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
-      (visibleStreams(s, None, None), alerts.firing, alerts.events(None, 20), streams.ingestedToday).tupled.flatMap {
+      (
+        visibleStreams(s, None, None),
+        alerts.firing.flatMap(alertAccess.filter(s.viewer, _)),
+        alertAccess.events(s.viewer, None, 20),
+        streams.ingestedToday
+      ).tupled.flatMap {
         (ss, f, ev, today) =>
           Ok(OverviewDto(
             ss.filter(_.streamType != StreamType.Metrics) ++
@@ -73,10 +78,14 @@ final class DataRoutes(streams: StreamStore,
     )
 
   private def getServiceNames(req: Request[IO]): IO[Response[IO]] =
-    authed(req)(_ => streams.serviceNames.flatMap(Ok(_)))
+    authed(req)(s => acl.hidden(s.viewer).flatMap(streams.serviceNames).flatMap(Ok(_)))
 
   private def getMetricsServices(req: Request[IO]): IO[Response[IO]] =
-    authed(req)(_ => streams.metricServices.flatMap(Ok(_)))
+    authed(req)(s =>
+      streams.metricServices.flatMap(m => acl.filter(s.viewer, StreamType.Metrics, m.toList)(_._1)).flatMap(xs =>
+        Ok(xs.toMap)
+      )
+    )
 
   private def getStreamValues(req: Request[IO], t: String, name: String): IO[Response[IO]] =
     authed(req)(s =>
@@ -93,13 +102,14 @@ final class DataRoutes(streams: StreamStore,
       body[PanelSqlReq](req)(r =>
         if !StreamType.all.contains(r.spec.streamType) then err(ErrorCode.StreamTypeInvalid)
         else
-          streams.find(r.spec.streamType, r.spec.stream.trim).flatMap {
+          // 見られないストリームは、ないものとして扱う（列の名前を出さない）
+          streams.find(r.spec.streamType, r.spec.stream.trim).flatMap(_.filterA(st =>
+            acl.visible(s.viewer, st.streamType, st.name)
+          )).flatMap {
             case None => err(ErrorCode.MetricStreamNotFound)
             case Some(st) =>
               streams.fields(st.id).flatMap { fs =>
-                val labels = fs.map(_.name).filterNot(n =>
-                  n == Columns.Timestamp || n == "value" || n == "__name__" || n == "__type__"
-                )
+                val labels = fs.map(_.name).filterNot(QueryBuilder.notLabels)
                 val numeric = fs.filter(f => f.fieldType == "int64" || f.fieldType == "float64").map(_.name).toSet
                 QueryBuilder.panel(r.spec, r.kind, labels, numeric) match {
                   case Left(e) => err(ErrorCode.InvalidInput, e)
@@ -257,6 +267,9 @@ final class DataRoutes(streams: StreamStore,
   private val acl = engine.acl
 
   /** 見られるストリームだけ（見られなければ 404）。 */
+  /** アラートのルールの閲覧権限（ホームの発生中のルールと履歴を、見られるものに絞る）。 */
+  private val alertAccess = new AlertAccess(alerts, engine)
+
   private def withStream(s: AuthSession, t: String, name: String)(f: StreamRow => IO[Response[IO]]): IO[Response[IO]] =
     streams.find(t, name).flatMap {
       case None => err(ErrorCode.StreamNotFound)

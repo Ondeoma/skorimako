@@ -4,6 +4,7 @@ import cats.effect.*
 import org.http4s.*
 import org.http4s.headers.Authorization
 import sbirds.auth.Crypto
+import sbirds.http.SessionCookie
 import skorimako.auth.ApiKeys
 import skorimako.core.*
 import skorimako.db.*
@@ -15,20 +16,21 @@ import java.util.Base64
 /** 認証: Cookie のセッション、または `Authorization: Bearer <APIキー>`（取り込みは Basic のパスワードにキーを入れてもよい）。 */
 final class SessionAuth(users: UserStore, cfg: ApiConfig) {
 
+  private val cookie = new SessionCookie(cfg.cookieName, cfg.cookieSecure, cfg.sessionTtl)
+
   private def isAdmin(u: User, gs: List[Group]) = u.isAdmin || gs.exists(g => cfg.adminGroups.contains(g.name))
 
   def fromRequest(req: Request[IO]): IO[Option[AuthSession]] =
     key(req) match {
       case Some(token) =>
-        val mcp = req.pathInfo.renderString.startsWith("/mcp") ||
-          req.headers.get(org.typelevel.ci.CIString("X-Skorimako-Mcp")).isDefined
+        // MCP 経由の印は、サーバーの中で付けた属性だけを信用する（外から付けられるヘッダーは見ない）
+        val mcp = req.pathInfo.renderString.startsWith("/mcp") || req.attributes.contains(SessionAuth.McpCall)
         fromKey(token, mcp)
       case None =>
-        req.cookies.find(_.name == cfg.cookieName).map(_.content) match {
+        cookie.hash(req) match {
           case None => IO.pure(None)
-          case Some(token) => users.findSession(Crypto.sha256(token), Instant.now()).map(_.map((u, gs) =>
-              AuthSession(u, gs, isAdmin(u, gs))
-            ))
+          case Some(hash) =>
+            users.findSession(hash, Instant.now()).map(_.map((u, gs) => AuthSession(u, gs, isAdmin(u, gs))))
         }
     }
 
@@ -56,39 +58,18 @@ final class SessionAuth(users: UserStore, cfg: ApiConfig) {
         )).toOption.map(_.split(":", 2)).collect { case Array(_, p) => p }.getOrElse("")
     }.filter(ApiKeys.looksLike)
 
-  def issue(user: User, idToken: Option[String] = None): IO[ResponseCookie] = {
-    val token = Crypto.randomToken()
-    users.createSession(
-      Crypto.sha256(token),
-      user.id,
-      Instant.now().plusSeconds(cfg.sessionTtl.toSeconds),
-      idToken
-    ).as(cookie(token, cfg.sessionTtl.toSeconds))
-  }
+  def issue(user: User, idToken: Option[String] = None): IO[ResponseCookie] =
+    cookie.issue((hash, expires) => users.createSession(hash, user.id, expires, idToken))
 
   /** sbirds のアプリの表示名（ログインしたときの ID トークンにある. API キーや開発用のログインでは空）. */
-  def appNames(req: Request[IO]): IO[Map[String, String]] =
-    req.cookies.find(_.name == cfg.cookieName) match {
-      case Some(c) =>
-        users.sessionIdToken(Crypto.sha256(c.content)).map(_.fold(Map.empty)(sbirds.auth.AppNames.fromIdToken))
-      case None => IO.pure(Map.empty)
-    }
+  def appNames(req: Request[IO]): IO[Map[String, String]] = cookie.appNames(req)(users.sessionIdToken)
 
   /** セッションを消す. IdP からもログアウトするための id_token（OIDC でログインしていたとき）と、Cookie を消す指示を返す. */
-  def revoke(req: Request[IO]): IO[(Option[String], ResponseCookie)] =
-    req.cookies.find(_.name == cfg.cookieName) match {
-      case Some(c) => users.deleteSession(Crypto.sha256(c.content)).map(_ -> cookie("", 0))
-      case None => IO.pure(None -> cookie("", 0))
-    }
+  def revoke(req: Request[IO]): IO[(Option[String], ResponseCookie)] = cookie.revoke(req)(users.deleteSession)
+}
 
-  private def cookie(value: String, maxAge: Long): ResponseCookie =
-    ResponseCookie(
-      cfg.cookieName,
-      value,
-      maxAge = Some(maxAge),
-      path = Some("/"),
-      httpOnly = true,
-      secure = cfg.cookieSecure,
-      sameSite = Some(SameSite.Lax)
-    )
+object SessionAuth {
+
+  /** MCP のツールが REST API を内部から呼んだ印（監査の経路を mcp にする）。要求の属性なので、外からは付けられない。 */
+  val McpCall: org.typelevel.vault.Key[Unit] = org.typelevel.vault.Key.newKey[SyncIO, Unit].unsafeRunSync()
 }

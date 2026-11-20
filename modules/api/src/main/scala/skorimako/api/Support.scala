@@ -24,7 +24,8 @@ final case class ApiConfig(
   oauthClients: List[OAuthClient] = Nil,
   stui: Option[LinkService] = None,
   internalSecret: String = "", // ノード間の問い合わせの署名（APP_SECRET から）
-  grpcPort: Int = 0)
+  grpcPort: Int = 0,
+  rateLimit: sbirds.http.RateLimitConfig = sbirds.http.RateLimitConfig())
 
 /** 連携する stui（skorimako をクライアントとして登録しておく）。url は画面から開く URL、internalUrl はサーバーから呼ぶ URL。 */
 final case class LinkService(provider: String,
@@ -36,16 +37,14 @@ final case class LinkService(provider: String,
 }
 
 /** 認可を求める外部のサービス（OAUTH_CLIENTS で登録する。stui がリンクの要約を読むため）。redirectUri は完全一致で照合する。 */
-final case class OAuthClient(id: String,
-                             secret: String,
-                             redirectUri: String,
-                             name: String,
-                             scopes: List[String] = List("read"))
+type OAuthClient = sbirds.oauth.OAuthClient
+val OAuthClient = sbirds.oauth.OAuthClient
 
 extension (s: AuthSession) {
 
-  /** 検索の権限（管理者・グループ）。 */
-  def viewer: skorimako.engine.Viewer = skorimako.engine.Viewer(s.isAdmin, s.groups.map(_.name).toSet)
+  /** 検索の権限（管理者・グループ）と、検索の同時実行の上限の単位（ユーザーごと）。 */
+  def viewer: skorimako.engine.Viewer =
+    skorimako.engine.Viewer(s.isAdmin, s.groups.map(_.name).toSet, Some(s.user.id.toString))
 }
 
 type Res[A] = IO[Either[AppError, A]]

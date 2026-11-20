@@ -30,6 +30,14 @@ class DuckSpec extends munit.FunSuite {
       Map("body" -> FieldType.Utf8, "status" -> FieldType.Float64),
       f2
     )
+    // 同じキャッシュにある、ビューにしていないファイル（見る権限のないストリームのもの）
+    val f3 = dir.resolve("cache/secret.parquet")
+    Duck.writeParquet(
+      cfg,
+      Seq(Row(1000000L, Map("body" -> Value.Str("secret")))),
+      Map("body" -> FieldType.Utf8),
+      f3
+    )
     val fields = List(
       FieldDto("body", FieldType.Utf8),
       FieldDto("status", FieldType.Float64),
@@ -40,8 +48,7 @@ class DuckSpec extends munit.FunSuite {
       cfg,
       List(DuckSession.View("default", List(f1, f2), fields)),
       0L,
-      10000000L,
-      List(dir.resolve("cache"))
+      10000000L
     )
     try {
       val r = s.query("""SELECT body, status, "user", extra FROM "default" ORDER BY _timestamp""", 100)
@@ -51,6 +58,10 @@ class DuckSpec extends munit.FunSuite {
       assertEquals(c.rows.head.head.asNumber.flatMap(_.toLong), Some(2L))
       // 手元のほかのファイルは読めない
       intercept[java.sql.SQLException](s.query("SELECT * FROM read_csv('/etc/passwd')", 10))
+      // ビューにしていないファイルは、同じキャッシュの中でも読めない
+      intercept[java.sql.SQLException](s.query(s"SELECT * FROM read_parquet('$f3')", 10))
+      intercept[java.sql.SQLException](s.query(s"SELECT * FROM read_parquet('${dir.resolve("cache")}/*.parquet')", 10))
+      intercept[java.sql.SQLException](s.query(s"SELECT * FROM glob('${dir.resolve("cache")}/*')", 10))
       // 設定は変えられない
       intercept[java.sql.SQLException](s.query("SET enable_external_access = true", 10))
     } finally s.close()
@@ -63,8 +74,7 @@ class DuckSpec extends munit.FunSuite {
       cfg,
       List(DuckSession.View("empty", Nil, List(FieldDto("body", FieldType.Utf8)))),
       0L,
-      1L,
-      List(dir)
+      1L
     )
     try assertEquals(
         s.query("SELECT count(*), max(body) FROM empty", 10).rows.head.head.asNumber.flatMap(_.toLong),

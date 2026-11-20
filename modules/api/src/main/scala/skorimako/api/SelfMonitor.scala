@@ -1,5 +1,6 @@
 package skorimako.api
 
+import sbirds.db.*
 import cats.effect.*
 import cats.syntax.all.*
 import skorimako.core.*

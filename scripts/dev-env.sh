@@ -2,6 +2,8 @@
 export DATABASE_URL=jdbc:postgresql://localhost:54383/skorimako DATABASE_USER=skorimako DATABASE_PASSWORD=skorimako
 export PUBLIC_URL=${PUBLIC_URL:-http://localhost:5181} HTTP_PORT=8101
 export DEV_LOGIN=true
+# 開発では、IP ごとの回数の制限を緩める（スモークテストなどが同じ IP から続けて呼ぶ）
+export RATE_LIMIT_AUTH=${RATE_LIMIT_AUTH:-300} RATE_LIMIT_PUBLIC=${RATE_LIMIT_PUBLIC:-1000}
 export S3_ENDPOINT=http://localhost:3923 S3_BUCKET=skorimako S3_ACCESS_KEY=skorimako S3_SECRET_KEY=skorimakoskorimako
 export DATA_DIR=${DATA_DIR:-$PWD/target/dev-data}
 # 開発中は早めに書き出し・評価して確かめやすくする

@@ -94,4 +94,9 @@ class PruneSpec extends munit.FunSuite {
     assertEquals(Prune.mergeTags(List(t, Map("svc" -> List("c")))), Map("svc" -> List("a", "b", "c")))
     assertEquals(Prune.mergeTags(List(t, Map.empty)), Map.empty)
   }
+
+  test("条件の検査: 行のコメントは \\r でも終わる（その後ろの括弧も数える）") {
+    assert(SqlText.checkCondition("a = 1 -- x\n AND b = 2").isRight)
+    assert(SqlText.checkCondition("a = 1 --\r) OR (true").isLeft)
+  }
 }

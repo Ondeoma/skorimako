@@ -21,6 +21,7 @@ final case class QueryConfig(
   cacheMaxBytes: Long = 10L << 30, // これを超えたら古く使ったものから消す
   timeout: FiniteDuration = 60.seconds, // 1回の検索の上限
   concurrency: Int = 4, // 同時に動かす検索の数（ノードごと）
+  perUser: Int = 2, // 1人の利用者が同時に動かす検索の数（ノードごと。超えた分は待つ。サーバーの中の処理は対象外）
   maxRows: Int = 10000 // 1回の検索で返す行の上限
 )
 
@@ -43,7 +44,8 @@ final class QueryEngine(store: StreamStore,
                         sem: Semaphore[IO],
                         val acl: Acl,
                         stats: Stats,
-                        live: Ref[IO, LiveRows]) {
+                        live: Ref[IO, LiveRows],
+                        perUser: Ref[IO, Map[String, (Semaphore[IO], Int)]]) {
 
   private def local(key: String): Path = cfg.cacheDir.resolve(key).normalize()
   private val liveDir = cfg.cacheDir.resolve("_live")
@@ -64,16 +66,22 @@ final class QueryEngine(store: StreamStore,
   }
 
   /** ビュー（ストリームごとの Parquet の一覧と列）。temp は検索の後で消すファイル（書き出す前の行）。 */
-  private def views(streamType: String, names: List[String], start: Long, end: Long, prune: Map[String, Set[String]])
-    : IO[(List[DuckSession.View], Int, Long, List[Path])] =
+  private def views(v: Viewer,
+                    streamType: String,
+                    names: List[String],
+                    start: Long,
+                    end: Long,
+                    prune: Map[String, Set[String]]): IO[(List[DuckSession.View], Int, Long, List[Path])] =
     for {
-      rows <- names.traverse(n => store.find(streamType, n).map(n -> _))
+      // 見られないストリームは、ないものと同じ（空のビュー）にする
+      seen <- acl.filter(v, streamType, names)(identity)
+      rows <- names.traverse(n => (if seen.contains(n) then store.find(streamType, n) else IO.pure(None)).map(n -> _))
       found = rows.collect { case (n, Some(r)) => n -> r }
       all <- store.filesFor(found.map(_._2.id), start, end)
       files = all.filter(f => Prune.keep(f.tags, prune))
       _ = stats.inc("skorimako_query_files_pruned_total", Map.empty, (all.size - files.size).toDouble)
       local <- files.parTraverseN(8)(f => fetch(f).map(f -> _))
-      buf <- live.get.flatMap(_(streamType, names.toSet, start, end)).handleError(_ => Map.empty)
+      buf <- live.get.flatMap(_(streamType, seen.toSet, start, end)).handleError(_ => Map.empty)
       vs <- rows.traverse {
         (n, r) =>
           r.traverse(x => store.fields(x.id)).map(_.getOrElse(Nil)).flatMap { fs =>
@@ -96,37 +104,60 @@ final class QueryEngine(store: StreamStore,
       }
     } yield (vs.map(_._1), files.size, files.map(_.size).sum, vs.flatMap(_._2))
 
+  /** 利用者ごとの同時実行の枠（v.key ごとに cfg.perUser 本まで。超えた分は待つ）。key のない処理（サーバーの中）は対象外。 */
+  private def userSlot(v: Viewer): Resource[IO, Unit] = v.key match {
+    case None => Resource.unit
+    case Some(k) =>
+      Resource.make(
+        Semaphore[IO](math.max(1, cfg.perUser).toLong).flatMap(fresh =>
+          perUser.modify { m =>
+            val (s, n) = m.getOrElse(k, (fresh, 0))
+            (m.updated(k, (s, n + 1)), s)
+          }
+        )
+      )(_ =>
+        // 使っている人がいなくなったら捨てる
+        perUser.update(m =>
+          m.get(k) match {
+            case Some((s, n)) if n > 1 => m.updated(k, (s, n - 1))
+            case _ => m - k
+          }
+        )
+      ).flatMap(_.permit)
+  }
+
   /**
-   * ストリームのビューを作った DuckDB で f を実行する（同時に動かす数と時間に上限がある）。
+   * ストリームのビューを作った DuckDB で f を実行する（同時に動かす数と時間に上限がある。同時に動かす数は、全体と利用者ごと）。
+   * v が見られないストリームは、ないものと同じ（空のビュー）になる。
    * f の中で失敗したら Left（SQL の誤りなど、利用者に見せる文言）。
    */
-  def session[A](streamType: String,
+  def session[A](v: Viewer,
+                 streamType: String,
                  names: List[String],
                  start: Long,
                  end: Long,
                  prune: Map[String, Set[String]] = Map.empty)(f: DuckSession => A): IO[Either[String, (A, Int, Long)]] =
-    sem.permit.use { _ =>
+    (userSlot(v) *> sem.permit).use { _ =>
       IO.monotonic.flatMap { t0 =>
-        Resource.make(views(streamType, names.distinct, start, end, prune))((_, _, _, tmp) =>
+        Resource.make(views(v, streamType, names.distinct, start, end, prune))((_, _, _, tmp) =>
           IO.blocking(tmp.foreach(p => scala.util.Try(Files.deleteIfExists(p))))
         ).use {
           (vs, nFiles, nBytes, _) =>
-            Resource.make(IO.blocking(DuckSession.open(duck, vs, start, end, List(cfg.cacheDir))))(s =>
+            Resource.make(IO.blocking(DuckSession.open(duck, vs, start, end)))(s =>
               IO.blocking(s.close())
             ).use { s =>
               // 時間切れになったら実行中の文を止める（止められた文は例外で終わる）
-              (IO.sleep(cfg.timeout) *> IO(s.cancel())).background.surround(IO.blocking(f(s))).attempt.map {
-                case Right(a) => Right((a, nFiles, nBytes))
+              (IO.sleep(cfg.timeout) *> IO(s.cancel())).background.surround(IO.blocking(f(s))).attempt.flatMap {
+                case Right(a) => IO.pure(Right((a, nFiles, nBytes)))
                 case Left(_) if s.isCancelled =>
-                  Left(s"検索が時間内（${cfg.timeout.toSeconds}秒）に終わりませんでした。時間の範囲を狭めるか、条件を足してください")
-                case Left(e: QueryError) => Left(e.message)
-                case Left(e: java.sql.SQLException) => Left(QueryEngine.clean(e.getMessage))
-                case Left(e) => Left(s"検索できませんでした: ${e.getClass.getSimpleName}")
+                  IO.pure(Left(s"検索が時間内（${cfg.timeout.toSeconds}秒）に終わりませんでした。時間の範囲を狭めるか、条件を足してください"))
+                case Left(e: QueryError) => IO.pure(Left(e.message))
+                case Left(e: java.sql.SQLException) => IO.pure(Left(QueryEngine.clean(e.getMessage)))
+                // 予期しない失敗の中身はログにだけ出す
+                case Left(e) => QueryEngine.internal(ErrorCode.QueryRunFailed, e).map(Left(_))
               }
             }
-        }.handleErrorWith(e =>
-          IO.pure(Left(s"検索の準備ができませんでした: ${Option(e.getMessage).getOrElse(e.getClass.getSimpleName).take(300)}"))
-        )
+        }.handleErrorWith(e => QueryEngine.internal(ErrorCode.QueryPrepareFailed, e).map(Left(_)))
           .flatTap(r =>
             IO.monotonic.map { t1 =>
               stats.inc("skorimako_query_seconds_sum", Map("type" -> streamType), (t1 - t0).toMillis / 1000.0)
@@ -137,17 +168,26 @@ final class QueryEngine(store: StreamStore,
       }
     }
 
-  /** SQL が参照しているストリーム（その種類の既存のストリームの名前と一致するもの）のうち、見られるもの。見られないものがあれば Left。 */
-  def referenced(v: Viewer, streamType: String, names: Set[String]): IO[Either[String, List[String]]] =
-    store.names(streamType).map(_.filter(n => names.contains(n) || names.contains(n.toLowerCase))).flatMap { ns =>
-      acl.filter(v, streamType, ns)(identity).map { ok =>
-        val denied = ns.filterNot(ok.contains)
-        if denied.nonEmpty then Left(s"ストリーム ${denied.mkString("・")} を見る権限がありません") else Right(ok)
-      }
-    }
+  /** SQL が参照しているストリーム（その種類の既存のストリームの名前と一致するもの）を、見られるものと見られないものに分ける。 */
+  private def split(v: Viewer, streamType: String, names: Set[String]): IO[(List[String], List[String])] =
+    store.names(streamType).map(_.filter(n => names.contains(n) || names.contains(n.toLowerCase))).flatMap(ns =>
+      acl.filter(v, streamType, ns)(identity).map(ok => (ok, ns.filterNot(ok.contains)))
+    )
 
-  private def visible(v: Viewer, streamType: String, name: String): IO[Either[String, Unit]] =
-    acl.visible(v, streamType, name).map(ok => Either.cond(ok, (), s"ストリーム $name を見る権限がありません"))
+  /**
+   * SQL が参照しているストリームのうち、見られるもの。
+   * 見られないものは、ないものと同じに扱う（何も言わずに外す。見られないストリームがあることを文言で知らせない）。
+   */
+  def referenced(v: Viewer, streamType: String, names: Set[String]): IO[List[String]] =
+    split(v, streamType, names).map(_._1)
+
+  /** SQL が参照しているストリームを、すべて見られるか（アラートのルールを保存するときに確かめる）。 */
+  def allVisible(v: Viewer, streamType: String, names: Set[String]): IO[Boolean] =
+    split(v, streamType, names).map(_._2.isEmpty)
+
+  /** その人が見られるストリーム。見られないものは、ないものと区別しない（None）。 */
+  private def visibleStream(v: Viewer, streamType: String, name: String): IO[Option[StreamRow]] =
+    acl.visible(v, streamType, name).flatMap(ok => if ok then store.find(streamType, name) else IO.pure(None))
 
   /** 利用者の SQL。 */
   def sql(v: Viewer, r: SqlQueryReq): IO[Either[String, QueryResultDto]] =
@@ -155,12 +195,11 @@ final class QueryEngine(store: StreamStore,
       case Left(e) => IO.pure(Left(e))
       case Right((sql, names)) =>
         referenced(v, r.streamType, names).flatMap {
-          case Left(e) => IO.pure(Left(e))
-          case Right(Nil) =>
+          case Nil =>
             IO.pure(Left(s"FROM に${StreamType.label(r.streamType)}のストリームの名前を書いてください（例: SELECT * FROM \"default\"）"))
-          case Right(ss) =>
+          case ss =>
             val limit = math.max(1, math.min(r.limit.getOrElse(1000), cfg.maxRows))
-            session(r.streamType, ss, r.start, r.end)(_.query(
+            session(v, r.streamType, ss, r.start, r.end)(_.query(
               QueryBuilder.expand(sql, r.start, r.end),
               limit
             )).map(_.map {
@@ -172,8 +211,8 @@ final class QueryEngine(store: StreamStore,
 
   // ---------------------------------------------------------------- ログ（RUM も同じ）
 
-  private def textColumns(streamType: String, stream: String): IO[List[String]] =
-    store.find(streamType, stream).flatMap(_.traverse(s => store.fields(s.id))).map { fs =>
+  private def textColumns(v: Viewer, streamType: String, stream: String): IO[List[String]] =
+    visibleStream(v, streamType, stream).flatMap(_.traverse(s => store.fields(s.id))).map { fs =>
       val all = fs.getOrElse(Nil).filter(_.fieldType == FieldType.Utf8).map(_.name)
       val main = List("body", "message", "msg", "log", "status_message", "stack").filter(all.contains)
       // 本文の列があればそれだけを探す（なければ文字列の列すべて）
@@ -185,59 +224,54 @@ final class QueryEngine(store: StreamStore,
     Names.stream(r.stream) match {
       case Left(e) => IO.pure(Left(e))
       case Right(stream) =>
-        visible(v, streamType, stream).flatMap {
-          case Left(e) => IO.pure(Left(e))
-          case Right(_) =>
-            textColumns(streamType, stream).flatMap { tc =>
-              QueryBuilder.conditions(r.where, r.keyword, tc) match {
-                case Left(e) => IO.pure(Left(e))
-                case Right(conds) =>
-                  val bucket = QueryBuilder.interval(r.start, r.end)
-                  val limit = math.max(1, math.min(r.limit.getOrElse(100), 1000))
-                  val q = QueryBuilder.logSearch(
-                    stream,
-                    conds,
-                    r.order.getOrElse("desc"),
-                    limit,
-                    math.max(0, r.offset.getOrElse(0)),
-                    bucket
-                  )
-                  session(streamType, List(stream), r.start, r.end, Prune.constraints(r.where)) { s =>
-                    val list = s.query(q.list, limit)
-                    val total = s.query(
-                      q.count,
-                      1
-                    ).rows.headOption.flatMap(_.headOption).flatMap(_.asNumber).flatMap(_.toLong).getOrElse(0L)
-                    val hist = s.query(q.histogram, 100000).rows.flatMap {
-                      case t :: c :: Nil =>
-                        (t.asNumber.flatMap(_.toLong), c.asNumber.flatMap(_.toLong)).mapN(BucketDto(_, _))
-                      case _ => None
-                    }
-                    (list, total, hist)
-                  }.map(_.map { case ((list, total, hist), n, b) =>
-                    LogSearchDto(list.copy(scannedFiles = n, scannedBytes = b), total, hist, bucket, q.list)
-                  })
-              }
-            }
+        // 見られないストリームは、ないストリームと同じ結果になる（列の名前も読まない）
+        textColumns(v, streamType, stream).flatMap { tc =>
+          QueryBuilder.conditions(r.where, r.keyword, tc) match {
+            case Left(e) => IO.pure(Left(e))
+            case Right(conds) =>
+              val bucket = QueryBuilder.interval(r.start, r.end)
+              val limit = math.max(1, math.min(r.limit.getOrElse(100), 1000))
+              val q = QueryBuilder.logSearch(
+                stream,
+                conds,
+                r.order.getOrElse("desc"),
+                limit,
+                math.max(0, r.offset.getOrElse(0)),
+                bucket
+              )
+              session(v, streamType, List(stream), r.start, r.end, Prune.constraints(r.where)) { s =>
+                val list = s.query(q.list, limit)
+                val total = s.query(
+                  q.count,
+                  1
+                ).rows.headOption.flatMap(_.headOption).flatMap(_.asNumber).flatMap(_.toLong).getOrElse(0L)
+                val hist = s.query(q.histogram, 100000).rows.flatMap {
+                  case t :: c :: Nil =>
+                    (t.asNumber.flatMap(_.toLong), c.asNumber.flatMap(_.toLong)).mapN(BucketDto(_, _))
+                  case _ => None
+                }
+                (list, total, hist)
+              }.map(_.map { case ((list, total, hist), n, b) =>
+                LogSearchDto(list.copy(scannedFiles = n, scannedBytes = b), total, hist, bucket, q.list)
+              })
+          }
         }
     }
   }
 
   // ---------------------------------------------------------------- メトリクス
 
-  private val notLabels = Set(Columns.Timestamp, "value", "__name__", "__type__")
-
   def metrics(v: Viewer, r: MetricQueryReq): IO[Either[String, MetricResultDto]] =
     Names.metric(r.metric).toRight("メトリクスの名前を指定してください").flatMap(Names.stream) match {
       case Left(e) => IO.pure(Left(e))
       case Right(stream) =>
-        (visible(v, StreamType.Metrics, stream), store.find(StreamType.Metrics, stream)).tupled.flatMap {
-          case (Left(e), _) => IO.pure(Left(e))
-          case (_, None) => IO.pure(Left(s"メトリクス $stream がありません"))
-          case (_, Some(st)) =>
+        visibleStream(v, StreamType.Metrics, stream).flatMap {
+          // 見られないメトリクスも、ないものと同じ文言にする
+          case None => IO.pure(Left(s"メトリクス $stream がありません"))
+          case Some(st) =>
             store.fields(st.id).flatMap { fs =>
               val names = fs.map(_.name).toSet
-              val labels = fs.map(_.name).filterNot(notLabels)
+              val labels = fs.map(_.name).filterNot(QueryBuilder.notLabels)
               val groups = r.groupBy.map(_.trim).filter(_.nonEmpty).distinct
               val step = r.stepSeconds.filter(_ > 0).map(_.toLong * 1000000L).getOrElse(QueryBuilder.interval(
                 r.start,
@@ -251,7 +285,7 @@ final class QueryEngine(store: StreamStore,
               } yield sql) match {
                 case Left(e) => IO.pure(Left(e))
                 case Right(sql) =>
-                  session(StreamType.Metrics, List(stream), r.start, r.end, Prune.constraints(r.where))(_.query(
+                  session(v, StreamType.Metrics, List(stream), r.start, r.end, Prune.constraints(r.where))(_.query(
                     sql,
                     200000
                   )).map(_.map {
@@ -300,6 +334,7 @@ final class QueryEngine(store: StreamStore,
                       s"SELECT * FROM ${SqlText.ident(name)} WHERE trace_id = ${SqlText.lit(id)} ORDER BY ${SqlText.ident(Columns.Timestamp)}"
                     // スパンの開始は索引の範囲の中にある（少し余裕をみる）
                     session(
+                      v,
                       StreamType.Traces,
                       List(name),
                       mi - 60000000L,
@@ -321,74 +356,70 @@ final class QueryEngine(store: StreamStore,
   // ---------------------------------------------------------------- サービス（トレースから）
 
   /** サービスごとの要求・エラー・所要時間（入口のスパン: SERVER・CONSUMER・ルート）と、サービス間の呼び出し。 */
-  def serviceMap(v: Viewer, stream: String, start: Long, end: Long): IO[Either[String, ServiceMapDto]] =
-    visible(v, StreamType.Traces, stream).flatMap {
-      case Left(e) => IO.pure(Left(e))
-      case Right(_) =>
-        val s = SqlText.ident(stream)
-        val secs = math.max(1.0, (end - start) / 1e6)
-        val statsSql =
-          s"""SELECT service_name, count(*) AS n, count(*) FILTER (WHERE status_code = 'ERROR') AS e,
-             |quantile_cont(duration, 0.5) / 1000.0, quantile_cont(duration, 0.95) / 1000.0, quantile_cont(duration, 0.99) / 1000.0
-             |FROM $s WHERE span_kind IN ('SERVER', 'CONSUMER') OR coalesce(parent_span_id, '') = '' GROUP BY 1 ORDER BY 2 DESC LIMIT 500""".stripMargin
-        val edgeSql =
-          s"""SELECT p.service_name, c.service_name, count(*), count(*) FILTER (WHERE c.status_code = 'ERROR'), quantile_cont(c.duration, 0.95) / 1000.0
-             |FROM $s c JOIN $s p ON c.parent_span_id = p.span_id AND c.trace_id = p.trace_id
-             |WHERE p.service_name <> c.service_name GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 2000""".stripMargin
-        session(StreamType.Traces, List(stream), start, end) { ses =>
-          val st = ses.query(statsSql, 500).rows.map { row =>
-            def num(i: Int) = row(i).asNumber.map(_.toDouble).getOrElse(0.0)
-            val n = num(1).toLong
-            ServiceStatDto(QueryEngine.text(row.head), n, num(2).toLong, n / secs, num(3), num(4), num(5))
-          }
-          val ed = ses.query(edgeSql, 2000).rows.map { row =>
-            def num(i: Int) = row(i).asNumber.map(_.toDouble).getOrElse(0.0)
-            ServiceEdgeDto(QueryEngine.text(row.head), QueryEngine.text(row(1)), num(2).toLong, num(3).toLong, num(4))
-          }
-          ServiceMapDto(st, ed)
-        }.map(_.map(_._1))
-    }
+  def serviceMap(v: Viewer, stream: String, start: Long, end: Long): IO[Either[String, ServiceMapDto]] = {
+    // 見られないストリームは、ないストリームと同じ結果になる（session が空のビューにする）
+    val s = SqlText.ident(stream)
+    val secs = math.max(1.0, (end - start) / 1e6)
+    val statsSql =
+      s"""SELECT service_name, count(*) AS n, count(*) FILTER (WHERE status_code = 'ERROR') AS e,
+         |quantile_cont(duration, 0.5) / 1000.0, quantile_cont(duration, 0.95) / 1000.0, quantile_cont(duration, 0.99) / 1000.0
+         |FROM $s WHERE span_kind IN ('SERVER', 'CONSUMER') OR coalesce(parent_span_id, '') = '' GROUP BY 1 ORDER BY 2 DESC LIMIT 500""".stripMargin
+    val edgeSql =
+      s"""SELECT p.service_name, c.service_name, count(*), count(*) FILTER (WHERE c.status_code = 'ERROR'), quantile_cont(c.duration, 0.95) / 1000.0
+         |FROM $s c JOIN $s p ON c.parent_span_id = p.span_id AND c.trace_id = p.trace_id
+         |WHERE p.service_name <> c.service_name GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 2000""".stripMargin
+    session(v, StreamType.Traces, List(stream), start, end) { ses =>
+      val st = ses.query(statsSql, 500).rows.map { row =>
+        def num(i: Int) = row(i).asNumber.map(_.toDouble).getOrElse(0.0)
+        val n = num(1).toLong
+        ServiceStatDto(QueryEngine.text(row.head), n, num(2).toLong, n / secs, num(3), num(4), num(5))
+      }
+      val ed = ses.query(edgeSql, 2000).rows.map { row =>
+        def num(i: Int) = row(i).asNumber.map(_.toDouble).getOrElse(0.0)
+        ServiceEdgeDto(QueryEngine.text(row.head), QueryEngine.text(row(1)), num(2).toLong, num(3).toLong, num(4))
+      }
+      ServiceMapDto(st, ed)
+    }.map(_.map(_._1))
+  }
 
   /** サービスの時系列（入口のスパンの、区切りごとの要求・エラー・p95）。 */
   def serviceSeries(v: Viewer,
                     stream: String,
                     service: String,
                     start: Long,
-                    end: Long): IO[Either[String, ServiceSeriesDto]] =
-    visible(v, StreamType.Traces, stream).flatMap {
-      case Left(e) => IO.pure(Left(e))
-      case Right(_) =>
-        val b = QueryBuilder.interval(start, end, 60)
-        val sql =
-          s"""SELECT (_timestamp // $b) * $b AS t, count(*), count(*) FILTER (WHERE status_code = 'ERROR'), quantile_cont(duration, 0.95) / 1000.0
-             |FROM ${SqlText.ident(stream)} WHERE service_name = ${SqlText.lit(service)}
-             |AND (span_kind IN ('SERVER', 'CONSUMER') OR coalesce(parent_span_id, '') = '') GROUP BY 1 ORDER BY 1""".stripMargin
-        session(StreamType.Traces, List(stream), start, end, Map("service_name" -> Set(service)))(_.query(
-          sql,
-          100000
-        )).map(_.map {
-          (res, _, _) =>
-            ServiceSeriesDto(
-              service,
-              res.rows.flatMap { row =>
-                row.head.asNumber.flatMap(_.toLong).map(t =>
-                  ServicePointDto(
-                    t,
-                    row(1).asNumber.flatMap(_.toLong).getOrElse(0L),
-                    row(2).asNumber.flatMap(_.toLong).getOrElse(0L),
-                    row(3).asNumber.map(_.toDouble)
-                  )
-                )
-              }
+                    end: Long): IO[Either[String, ServiceSeriesDto]] = {
+    val b = QueryBuilder.interval(start, end, 60)
+    val sql =
+      s"""SELECT (_timestamp // $b) * $b AS t, count(*), count(*) FILTER (WHERE status_code = 'ERROR'), quantile_cont(duration, 0.95) / 1000.0
+         |FROM ${SqlText.ident(stream)} WHERE service_name = ${SqlText.lit(service)}
+         |AND (span_kind IN ('SERVER', 'CONSUMER') OR coalesce(parent_span_id, '') = '') GROUP BY 1 ORDER BY 1""".stripMargin
+    session(v, StreamType.Traces, List(stream), start, end, Map("service_name" -> Set(service)))(_.query(
+      sql,
+      100000
+    )).map(_.map {
+      (res, _, _) =>
+        ServiceSeriesDto(
+          service,
+          res.rows.flatMap { row =>
+            row.head.asNumber.flatMap(_.toLong).map(t =>
+              ServicePointDto(
+                t,
+                row(1).asNumber.flatMap(_.toLong).getOrElse(0L),
+                row(2).asNumber.flatMap(_.toLong).getOrElse(0L),
+                row(3).asNumber.map(_.toDouble)
+              )
             )
-        })
-    }
+          }
+        )
+    })
+  }
 
   // ---------------------------------------------------------------- PromQL
 
   /**
    * PromQL の式のセレクターの対象を読む（start・end はミリ秒。範囲・offset・直近5分の分を足して読む）。
-   * 系列はラベル（value・_timestamp・__type__ 以外の列）の組ごと。読む行は最大 maxRows。
+   * 系列はラベル（value・_timestamp・__type__ 以外の列）の組ごと。読む行は、式全体の合計で最大 maxRows。
+   * セレクターは QueryEngine.MaxPromSelectors 個まで（セレクターごとに検索を 1 回動かすので）。
    */
   def promData(v: Viewer,
                e: PromQL.Expr,
@@ -398,57 +429,59 @@ final class QueryEngine(store: StreamStore,
     val sels = PromQL.selectors(e).map(_.copy(range = None, offset = 0)).distinct
     val from = (start - PromQL.lookback(e) - Prom.LookbackDelta) * 1000
     val to = end * 1000
-    sels.traverse { sel =>
-      Prom.metricName(sel) match {
-        case None => IO.pure(Left("メトリクスの名前を指定してください（例: http_requests_total{job=\"api\"}）"))
-        case Some(name) =>
-          (visible(v, StreamType.Metrics, name), store.find(StreamType.Metrics, name)).tupled.flatMap {
-            case (Left(err), _) => IO.pure(Left(err))
-            case (_, None) => IO.pure(Right(sel -> Nil)) // ないメトリクスは空
-            case (_, Some(_)) =>
-              val conds = Prom.sqlConds(sel)
-              val where = if conds.isEmpty then "" else conds.mkString(" WHERE ", " AND ", "")
-              val sql = s"SELECT * FROM ${SqlText.ident(name)}$where ORDER BY ${SqlText.ident(Columns.Timestamp)}"
-              val eqs = sel.matchers.filter(m => m.op == PromQL.MatchOp.Eq && m.label != "__name__").flatMap(m =>
-                Names.column(m.label).map(_ -> Set(m.value))
-              ).toMap
-              session(StreamType.Metrics, List(name), from, to, eqs) { s =>
-                val acc = scala.collection.mutable.LinkedHashMap.empty[
-                  Prom.Labels,
-                  (scala.collection.mutable.ArrayBuilder.ofLong, scala.collection.mutable.ArrayBuilder.ofDouble)
-                ]
-                var n = 0
-                s.scan(sql) { rs =>
-                  n += 1
-                  if n > maxRows then throw QueryError(s"読む点が多すぎます（$maxRows まで）。時間の範囲を狭めるか、ラベルで絞ってください")
-                  val md = rs.getMetaData
-                  var ts = 0L; var value = Double.NaN
-                  val labels = scala.collection.immutable.Map.newBuilder[String, String]
-                  (1 to md.getColumnCount).foreach { i =>
-                    md.getColumnLabel(i) match {
-                      case Columns.Timestamp => ts = rs.getLong(i)
-                      case "value" => value = { val d = rs.getDouble(i); if rs.wasNull() then Double.NaN else d }
-                      case "__type__" => ()
-                      case c => Option(rs.getObject(i)).foreach(o => labels += c -> o.toString)
+    // 読んだ行の数（式のすべてのセレクターの合計）
+    val read = new java.util.concurrent.atomic.AtomicLong(0)
+    if sels.size > QueryEngine.MaxPromSelectors then
+      IO.pure(Left(s"式のセレクターが多すぎます（${QueryEngine.MaxPromSelectors} 個まで）"))
+    else
+      sels.traverse { sel =>
+        Prom.metricName(sel) match {
+          case None => IO.pure(Left("メトリクスの名前を指定してください（例: http_requests_total{job=\"api\"}）"))
+          case Some(name) => visibleStream(v, StreamType.Metrics, name).flatMap {
+              case None => IO.pure(Right(sel -> Nil)) // ないメトリクス・見られないメトリクスは空
+              case Some(_) =>
+                val conds = Prom.sqlConds(sel)
+                val where = if conds.isEmpty then "" else conds.mkString(" WHERE ", " AND ", "")
+                val sql = s"SELECT * FROM ${SqlText.ident(name)}$where ORDER BY ${SqlText.ident(Columns.Timestamp)}"
+                val eqs = sel.matchers.filter(m => m.op == PromQL.MatchOp.Eq && m.label != "__name__").flatMap(m =>
+                  Names.column(m.label).map(_ -> Set(m.value))
+                ).toMap
+                session(v, StreamType.Metrics, List(name), from, to, eqs) { s =>
+                  val acc = scala.collection.mutable.LinkedHashMap.empty[
+                    Prom.Labels,
+                    (scala.collection.mutable.ArrayBuilder.ofLong, scala.collection.mutable.ArrayBuilder.ofDouble)
+                  ]
+                  s.scan(sql) { rs =>
+                    if read.incrementAndGet() > maxRows then
+                      throw QueryError(s"読む点が多すぎます（$maxRows まで）。時間の範囲を狭めるか、ラベルで絞ってください")
+                    val md = rs.getMetaData
+                    var ts = 0L; var value = Double.NaN
+                    val labels = scala.collection.immutable.Map.newBuilder[String, String]
+                    (1 to md.getColumnCount).foreach { i =>
+                      md.getColumnLabel(i) match {
+                        case Columns.Timestamp => ts = rs.getLong(i)
+                        case "value" => value = { val d = rs.getDouble(i); if rs.wasNull() then Double.NaN else d }
+                        case "__type__" => ()
+                        case c => Option(rs.getObject(i)).foreach(o => labels += c -> o.toString)
+                      }
+                    }
+                    val l = labels.result()
+                    if Prom.regexOk(sel, l) then {
+                      val (tb, vb) = acc.getOrElseUpdate(
+                        l,
+                        (
+                          new scala.collection.mutable.ArrayBuilder.ofLong,
+                          new scala.collection.mutable.ArrayBuilder.ofDouble
+                        )
+                      )
+                      tb += ts / 1000; vb += value
                     }
                   }
-                  val l = labels.result()
-                  if Prom.regexOk(sel, l) then {
-                    val (tb, vb) = acc.getOrElseUpdate(
-                      l,
-                      (
-                        new scala.collection.mutable.ArrayBuilder.ofLong,
-                        new scala.collection.mutable.ArrayBuilder.ofDouble
-                      )
-                    )
-                    tb += ts / 1000; vb += value
-                  }
-                }
-                sel -> acc.toList.map((l, b) => Prom.Series(l, b._1.result(), b._2.result()))
-              }.map(_.map(_._1))
-          }
-      }
-    }.map(_.sequence.map(_.toMap))
+                  sel -> acc.toList.map((l, b) => Prom.Series(l, b._1.result(), b._2.result()))
+                }.map(_.map(_._1))
+            }
+        }
+      }.map(_.sequence.map(_.toMap))
   }
 
   // ---------------------------------------------------------------- キャッシュの掃除
@@ -495,7 +528,15 @@ object QueryEngine {
       _ <- IO.blocking(Files.createDirectories(cfg.cacheDir))
       sem <- Semaphore[IO](cfg.concurrency.toLong)
       lv <- Ref.of[IO, LiveRows]((_, _, _, _) => IO.pure(Map.empty))
-    } yield new QueryEngine(store, objects, duck, cfg, sem, acl, stats, lv)
+      pu <- Ref.of[IO, Map[String, (Semaphore[IO], Int)]](Map.empty)
+    } yield new QueryEngine(store, objects, duck, cfg, sem, acl, stats, lv, pu)
+
+  /** PromQL の 1 つの式のセレクターの数の上限。 */
+  val MaxPromSelectors = 20
+
+  /** 予期しない失敗: 中身はコード付きでログにだけ出し、利用者にはコードと決まった文言だけを返す。 */
+  def internal(code: ErrorCode, e: Throwable): IO[String] =
+    sbirds.observe.Log.report(code, e.toString, e).as(s"${code.message}（${code.code}）")
 
   def text(j: Json): String = j.asString.getOrElse(if j.isNull then "" else j.noSpaces)
 

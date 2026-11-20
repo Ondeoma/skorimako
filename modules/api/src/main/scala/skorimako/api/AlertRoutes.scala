@@ -1,6 +1,7 @@
 package skorimako.api
 
 import cats.effect.*
+import cats.syntax.all.*
 import io.circe.Json
 import io.circe.syntax.*
 import org.http4s.*
@@ -43,11 +44,12 @@ final class AlertRoutes(store: AlertStore,
   }
 
   private def getAlerts(req: Request[IO]): IO[Response[IO]] =
-    authed(req)(_ => store.rules.flatMap(rs => Ok(rs.map(_.toDto))))
+    authed(req)(s => store.rules.flatMap(svc.access.filter(s.viewer, _)).flatMap(rs => Ok(rs.map(_.toDto))))
 
   private def getAlertsEvents(req: Request[IO]): IO[Response[IO]] =
-    authed(req)(_ =>
-      store.events(param(req, "ruleId").flatMap(uuidOpt), intParam(req, "limit", 100, 1000)).flatMap(Ok(_))
+    authed(req)(s =>
+      svc.access.events(s.viewer, param(req, "ruleId").flatMap(uuidOpt), intParam(req, "limit", 100, 1000))
+        .flatMap(Ok(_))
     )
 
   private def postAlertsTest(req: Request[IO]): IO[Response[IO]] =
@@ -82,19 +84,28 @@ final class AlertRoutes(store: AlertStore,
   private def postAlertAck(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(s =>
       body[AckReq](req)(r =>
-        store.ack(id, s.user.id, s.user.name, r.note.trim.take(500)).flatMap {
-          case true => audit(users, s, "alert.ack", Some(id.toString)) *>
-              store.rule(id).flatMap(x => Ok(x.map(_.toDto)))
-          case false => err(ErrorCode.AlertAckNotFiring)
-        }
+        withRule(s, id)(_ =>
+          store.ack(id, s.user.id, s.user.name, r.note.trim.take(500)).flatMap {
+            case true => audit(users, s, "alert.ack", Some(id.toString)) *>
+                store.rule(id).flatMap(x => Ok(x.map(_.toDto)))
+            case false => err(ErrorCode.AlertAckNotFiring)
+          }
+        )
       )
     )
 
   private def deleteAlertAck(req: Request[IO], id: UUID): IO[Response[IO]] =
-    authed(req)(s => store.unack(id) *> audit(users, s, "alert.unack", Some(id.toString)) *> NoContent())
+    authed(req)(s =>
+      withRule(s, id)(_ => store.unack(id) *> audit(users, s, "alert.unack", Some(id.toString)) *> NoContent())
+    )
 
+  /** ミュートの一覧。すべてのルールのミュートと、見られるルールのミュートだけ。 */
   private def getSilences(req: Request[IO]): IO[Response[IO]] =
-    authed(req)(_ => store.silences(param(req, "all").contains("true")).flatMap(Ok(_)))
+    authed(req)(s =>
+      (store.silences(param(req, "all").contains("true")), svc.access.visibleIds(s.viewer)).tupled.flatMap {
+        (xs, ids) => Ok(xs.filter(x => x.ruleId.forall(id => ids.forall(_.contains(id)))))
+      }
+    )
 
   private def postSilences(req: Request[IO]): IO[Response[IO]] =
     authed(req)(s =>
@@ -108,35 +119,49 @@ final class AlertRoutes(store: AlertStore,
         else if java.time.Duration.between(st, en).toDays > 30 then err(ErrorCode.MuteTooLong)
         else if r.ruleId.isEmpty && !s.canAdmin then err(ErrorCode.MuteAllAdminOnly)
         else
-          store.createSilence(r.ruleId, r.reason.trim.take(500), st, en, s.user.id).flatMap(id =>
-            audit(users, s, "silence.create", Some(id.toString)) *> Created(Json.obj("id" -> id.asJson))
-          )
+          // ルールを指定したミュートは、そのルールを見られる人だけ（見られないルールは、ないものと同じ）
+          r.ruleId.traverse(svc.access.rule(s.viewer, _)).flatMap {
+            case Some(None) => err(ErrorCode.RuleNotFound)
+            case _ =>
+              store.createSilence(r.ruleId, r.reason.trim.take(500), st, en, s.user.id).flatMap(id =>
+                audit(users, s, "silence.create", Some(id.toString)) *> Created(Json.obj("id" -> id.asJson))
+              )
+          }
       }
     )
 
+  /** ミュートを終わらせる。作成した人か管理者だけ。 */
   private def deleteSilence(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(s =>
-      store.endSilence(id).flatMap {
-        case true => audit(users, s, "silence.end", Some(id.toString)) *> NoContent()
-        case false => err(ErrorCode.MuteNotFound)
+      store.silenceOwner(id).flatMap {
+        case None => err(ErrorCode.MuteNotFound)
+        case Some(owner) if !s.canAdmin && !owner.contains(s.user.id) => err(ErrorCode.MuteEndNotAllowed)
+        case Some(_) =>
+          store.endSilence(id).flatMap {
+            case true => audit(users, s, "silence.end", Some(id.toString)) *> NoContent()
+            case false => err(ErrorCode.MuteNotFound)
+          }
       }
     )
 
   private def getAlert(req: Request[IO], id: UUID): IO[Response[IO]] =
-    authed(req)(_ => store.rule(id).flatMap(_.fold(err(ErrorCode.RuleNotFound))(r => Ok(r.toDto))))
+    authed(req)(s => withRule(s, id)(r => Ok(r.toDto)))
 
   private def putAlert(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(s =>
       body[AlertRuleReq](req)(r =>
         svc.validate(r) match {
           case Left(e) => err(ErrorCode.InvalidInput, e)
-          case Right(v) => canSee(s, v).ifM(
-              store.update(id, v).flatMap {
-                case false => err(ErrorCode.RuleNotFound)
-                case true => audit(users, s, "alert.update", Some(id.toString)) *>
-                    store.rule(id).flatMap(r => Ok(r.map(_.toDto)))
-              },
-              err(ErrorCode.StreamAccessDenied)
+          // いまのルールを見られる人だけが変えられる（見られないルールは、ないものと同じ）
+          case Right(v) => withRule(s, id)(_ =>
+              canSee(s, v).ifM(
+                store.update(id, v).flatMap {
+                  case false => err(ErrorCode.RuleNotFound)
+                  case true => audit(users, s, "alert.update", Some(id.toString)) *>
+                      store.rule(id).flatMap(r => Ok(r.map(_.toDto)))
+                },
+                err(ErrorCode.StreamAccessDenied)
+              )
             )
         }
       )
@@ -144,10 +169,12 @@ final class AlertRoutes(store: AlertStore,
 
   private def deleteAlert(req: Request[IO], id: UUID): IO[Response[IO]] =
     authed(req)(s =>
-      store.delete(id).flatMap {
-        case false => err(ErrorCode.RuleNotFound)
-        case true => audit(users, s, "alert.delete", Some(id.toString)) *> NoContent()
-      }
+      withRule(s, id)(_ =>
+        store.delete(id).flatMap {
+          case false => err(ErrorCode.RuleNotFound)
+          case true => audit(users, s, "alert.delete", Some(id.toString)) *> NoContent()
+        }
+      )
     )
 
   private def getDestinations(req: Request[IO]): IO[Response[IO]] =
@@ -211,9 +238,15 @@ final class AlertRoutes(store: AlertStore,
   private def getDeliveries(req: Request[IO]): IO[Response[IO]] =
     admin(req)(_ => store.deliveries(intParam(req, "limit", 100, 1000)).flatMap(Ok(_)))
 
-  /** ルールの対象のストリームを見られるか（SQL のルールは評価のときに確かめる）。 */
-  private def canSee(s: AuthSession, r: AlertRuleReq): IO[Boolean] =
-    if r.mode == AlertMode.Sql then IO.pure(true) else acl.visible(s.viewer, r.streamType, r.stream)
+  /** ルールの対象のストリームを見られるか（SQL のルールは、SQL が参照するストリームすべて）。 */
+  private def canSee(s: AuthSession, r: AlertRuleReq): IO[Boolean] = svc.access.canSee(s.viewer, r)
+
+  /** 保存してあるルールを見られるか（canSee と同じ判定）。 */
+  private def visibleRule(s: AuthSession, rule: RuleRow): IO[Boolean] = svc.access.visibleRule(s.viewer, rule)
+
+  /** 見られるルールで f を行う。見られないルールは、ないものと同じ（404）。 */
+  private def withRule(s: AuthSession, id: UUID)(f: RuleRow => IO[Response[IO]]): IO[Response[IO]] =
+    store.rule(id).flatMap(_.filterA(visibleRule(s, _))).flatMap(_.fold(err(ErrorCode.RuleNotFound))(f))
 
   /** 通知先を扱えるか: 管理者、または自分宛ての stui の DM。 */
   private def canManage(s: AuthSession, kind: String, target: Option[java.util.UUID]): Boolean =
