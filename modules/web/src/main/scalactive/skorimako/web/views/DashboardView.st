@@ -25,12 +25,12 @@ def initState() = State()
 
 def mounted(s: State, props: Props): Unit = load(s, props)
 
-def load(s: State, props: Props): Unit = Store.report(Api.get[DashboardDto](s"/api/dashboards/${props.dashboardId}")) { d =>
+def load(s: State, props: Props): Unit = Toasts.report(Api.get[DashboardDto](s"/api/dashboards/${props.dashboardId}")) { d =>
   s.d := Some(d); s.version := s.version.v + 1; pageTitle(d.name)
 }
 
 def save(s: State, props: Props, panels: List[PanelDto], name: Option[String] = None, desc: Option[String] = None): Unit = s.d.v.foreach { d =>
-  Store.report(Api.put[DashboardDto](s"/api/dashboards/${props.dashboardId}",
+  Toasts.report(Api.put[DashboardDto](s"/api/dashboards/${props.dashboardId}",
     DashboardReq(name.getOrElse(d.name), desc.getOrElse(d.description), panels).asJson)) { n => s.d := Some(n); s.version := s.version.v + 1 }
 }
 
@@ -99,7 +99,7 @@ def move(s: State, props: Props, p: PanelDto, d: Int): Unit = {
 def rename(s: State, props: Props): Unit = s.d.v.foreach { d => Dialog.prompt("名前", d.name)(n => if (n.trim.nonEmpty) save(s, props, d.panels, Some(n.trim))) }
 
 def removeDash(s: State, props: Props): Unit = Dialog.confirm("このダッシュボードを削除しますか？", "削除する") {
-  Store.report(Api.delete(s"/api/dashboards/${props.dashboardId}"))(_ => Store.go("/dashboards"))
+  Toasts.report(Api.delete(s"/api/dashboards/${props.dashboardId}"))(_ => Store.go("/dashboards"))
 }
 
 def span(p: PanelDto): String = s"grid-column: span ${math.max(1, math.min(p.width, 4))}"

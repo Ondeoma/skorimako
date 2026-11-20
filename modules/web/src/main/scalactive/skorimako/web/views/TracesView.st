@@ -19,7 +19,7 @@ case class State(services: RV[List[ServiceDto]] = RV(Nil),
 
 def initState() = State()
 
-def mounted(s: State): Unit = { pageTitle("トレース"); Query.get("service").foreach(Store.setService); search(s); Store.onReload(search(s)) }
+def mounted(s: State): Unit = { pageTitle("トレース"); Router.query.v.get("service").foreach(Store.setService); search(s); Store.onReload(search(s)) }
 
 def search(s: State): Unit = {
   val (start, end) = Store.range.v.micros
@@ -33,7 +33,7 @@ def search(s: State): Unit = {
       def pts(xs: List[TraceSummaryDto]) = xs.map(t => (t.start / 1000.0, Some(t.durationMicros / 1000.0))).sortBy(_._1)
       s.chart := ChartSpec("bar", List(ChartSeries("正常", pts(ok), "#2563eb"), ChartSeries("エラー", pts(err), "#dc2626")), unit = "ms", height = 160,
         onSelect = Some((a, b) => Store.setRange(TimeSel.custom(a, b))), emptyText = "トレースはありません")
-    case Failure(e) => s.loading := false; Store.error(e)
+    case Failure(e) => s.loading := false; Toasts.error(e)
   }
 }
 

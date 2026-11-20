@@ -2,21 +2,13 @@ package skorimako.web
 
 import io.circe.Json
 import io.github.ondeoma.scalactive.components.ComponentManager.*
-import org.scalajs.dom
 import skorimako.shared.*
-
-import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
-import scala.util.{Failure, Success}
-
-final case class Toast(id: Int, text: String, link: Option[String], error: Boolean)
 
 /** 画面全体で共有する状態. */
 object Store {
 
   val me: RV[Option[MeDto]] = RV(None)
   val config: RV[Option[ClientConfigDto]] = RV(None)
-  val toasts: RV[List[Toast]] = RV(Nil)
 
   /** サイドバーを開いているか（スマホの幅）. */
   val sideOpen: RV[Boolean] = RV(false)
@@ -25,7 +17,7 @@ object Store {
   val range: RV[TimeSel] = RV(TimeSel(Prefs.get("range", "1h")))
 
   /** 絞り込むサービス（service_name. 空ならすべて）. 画面をまたいで同じ. URL の ?service= があればそれを使う. */
-  val service: RV[String] = RV(Query.get("service").getOrElse(Prefs.get("service", "")))
+  val service: RV[String] = RV(Router.query.v.get("service").getOrElse(Prefs.get("service", "")))
 
   /** 選べるサービス（データを送ってきたもの）. */
   val serviceNames: RV[List[String]] = RV(Nil)
@@ -48,8 +40,6 @@ object Store {
   /** 読み直しの合図（↻ のボタン）. */
   val tick: RV[Int] = RV(0)
 
-  private var toastSeq = 0
-
   def refresh(): Unit = tick := tick.v + 1
 
   /** 時間の範囲が変わったとき・読み直しのときに f を呼ぶ（画面の mounted で使う）. */
@@ -67,50 +57,19 @@ object Store {
     if (t.preset != "custom") Prefs.set("range", t.preset)
   }
 
-  // ---------------------------------------------------------------- トースト
-
-  def toast(text: String, link: Option[String] = None, error: Boolean = false): Unit = {
-    toastSeq += 1
-    val t = Toast(toastSeq, text, link, error)
-    toasts := (toasts.v :+ t).takeRight(5)
-    dom.window.setTimeout(() => dismiss(t.id), if (error) 9000 else 5000)
-  }
-
-  def dismiss(id: Int): Unit = toasts := toasts.v.filterNot(_.id == id)
-
-  def error(e: Throwable): Unit = e match {
-    case ApiError(401, _) => ()
-    case other => toast(other.getMessage, error = true)
-  }
-
-  /** Future の失敗をトーストで知らせる. */
-  def report[A](f: Future[A])(ok: A => Unit): Unit = f.onComplete {
-    case Success(a) => ok(a)
-    case Failure(e) => error(e)
-  }
-
   def go(path: String): Unit = { sideOpen := false; Router.go(path) }
 
 }
 
 /** URL のクエリ. */
 object Query {
-  def get(k: String): Option[String] =
-    Option(new dom.URL(dom.window.location.href).searchParams.get(k)).filter(_.nonEmpty)
 
-  /** 今の URL のクエリを置き換える（履歴は増やさない）. */
-  def replace(params: (String, Option[String])*): Unit =
-    dom.window.history.replaceState(null, "", dom.window.location.pathname + Api.query(params*))
+  /** 今の URL のクエリを params だけにする（履歴は増やさない. 空の値は付けない）. 画面は作り直さない（App の reloadOnQueryChange）. */
+  def replace(params: (String, Option[String])*): Unit = {
+    val drop = (Router.query.v.keySet -- params.map(_._1)).toSeq.map(_ -> None)
+    Router.setQuery((drop ++ params.map((k, v) => k -> v.filter(_.nonEmpty)))*)
+  }
 }
-
-/** 画面内のダイアログ（ブラウザ標準の confirm・prompt・alert の代わり）. 表示は parts/DialogHost.st. */
-final case class DialogReq(message: String,
-                           okLabel: String,
-                           danger: Boolean,
-                           input: Option[RV[String]],
-                           cancel: Boolean,
-                           onOk: String => Unit,
-                           onCancel: () => Unit)
 
 /** この端末だけの表示の設定（localStorage. 使えないときは既定値）. */
 object Prefs extends sbirds.web.LocalPrefs("skorimako")

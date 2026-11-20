@@ -30,21 +30,20 @@ def key(s: State, props: Props, ev: dom.Event): Unit = { val e = ev.asInstanceOf
     val ms = matches(s, props).v
     pick(s, props, if (s.open.v && ms.nonEmpty) ms(math.min(s.active.v, ms.size - 1))._1 else s.q.v.trim)
   case "Escape"    => if (s.open.v) { e.preventDefault(); s.open := false }
+  case "Tab"       => s.open := false
   case _ => ()
 } }
 
 def typed(s: State, v: String): Unit = { s.q := v; s.open := true; s.active := 0 }
-// 候補を押す前に入力欄のフォーカスが外れるので、少し待ってから閉じる
-def blur(s: State): Unit = dom.window.setTimeout(() => s.open := false, 150)
 def itemCls(s: State, i: Int) = s.active.mapC(a => if (a == i) "cb-item on" else "cb-item")
 def indexed(s: State, props: Props) = computed(matches(s, props).v.zipWithIndex)
 def showList(s: State, props: Props) = computed(s.open.v && matches(s, props).v.nonEmpty)
 </script>
 
 <template>
-  <div class="cb">
+  <div class="cb" v-click-outside="s.open := false">
     <input type="search" :value="s.q" :placeholder="props.placeholder" autocomplete="off"
-      @input="typed(s, Dom.value(event))" @focus="s.open := true" @blur="blur(s)" @keydown="key(s, props, event)">
+      @input="typed(s, Dom.value(event))" @focus="s.open := true" @keydown="key(s, props, event)">
     <div v-if="showList(s, props)" class="cb-list">
       <div v-for="oi in indexed(s, props)" :class="itemCls(s, oi._2)" @mousedown.prevent="pick(s, props, oi._1._1)">
         <span class="cb-v">{{ oi._1._1 }}</span><span v-if="oi._1._2.nonEmpty" class="cb-l">{{ oi._1._2 }}</span>

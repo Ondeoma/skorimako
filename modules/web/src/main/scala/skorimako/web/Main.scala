@@ -16,6 +16,8 @@ object Main {
     ScalactiveConfig.defaultTitle = Some("skorimako")
     AppNames.init("skorimako")
     Theme.apply()
+    // お知らせは 5 秒（エラーは 9 秒）で消す
+    Toasts.duration = 5000
     // PWA（ホーム画面に追加・オフラインで開く・アラートのプッシュ通知）
     Pwa.register()
     App()(dom.document.body, AddMethod.appendS(IdSelector("app"))).init()

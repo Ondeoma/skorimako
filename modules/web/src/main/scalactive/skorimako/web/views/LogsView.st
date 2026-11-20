@@ -10,10 +10,10 @@ import scala.util.{Failure, Success}
 // ログ: ストリーム・時間の範囲・条件（SQL の WHERE）・キーワードで探す. 時間ごとの件数のグラフ（ドラッグで範囲を狭める）、
 // 行を開くとすべての列（値で絞り込める）. SQL のタブでは自由に集計できる.
 case class State(streams: RV[List[StreamDto]] = RV(Nil),
-                 stream: RV[String] = RV(Query.get("stream").getOrElse(Prefs.get("logs.stream", "default"))),
+                 stream: RV[String] = RV(Router.query.v.get("stream").getOrElse(Prefs.get("logs.stream", "default"))),
                  fields: RV[List[FieldDto]] = RV(Nil),
-                 where: RV[String] = RV(Query.get("where").getOrElse("")),
-                 keyword: RV[String] = RV(Query.get("q").getOrElse("")),
+                 where: RV[String] = RV(Router.query.v.get("where").getOrElse("")),
+                 keyword: RV[String] = RV(Router.query.v.get("q").getOrElse("")),
                  mode: RV[String] = RV("search"),
                  sql: RV[String] = RV(""),
                  result: RV[Option[LogSearchDto]] = RV(None),
@@ -60,8 +60,8 @@ val PageSize = 100
 
 def mounted(s: State): Unit = {
   pageTitle("ログ")
-  Query.get("service").foreach(Store.setService)
-  Store.report(Api.streams(Some(StreamType.Logs))) { ss =>
+  Router.query.v.get("service").foreach(Store.setService)
+  Toasts.report(Api.streams(Some(StreamType.Logs))) { ss =>
     s.streams := ss
     if (ss.nonEmpty && !ss.exists(_.name == s.stream.v)) s.stream := ss.head.name
     if (ss.nonEmpty) { loadFields(s); search(s) }

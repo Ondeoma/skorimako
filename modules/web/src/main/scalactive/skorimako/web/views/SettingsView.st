@@ -20,11 +20,11 @@ def mounted(s: State): Unit = {
   loadKeys(s)
   loadIntegrations(s)
   // stui の許可の画面から戻ったとき（?integration=stui&result=connected）
-  Query.get("integration").foreach { p =>
-    Query.get("result") match {
-      case Some("connected") => Store.toast(s"${AppNames.nameOf(p)} と連携しました")
-      case Some("denied")    => Store.toast(s"${AppNames.nameOf(p)} との連携は許可されませんでした", error = true)
-      case _                 => Store.toast(s"${AppNames.nameOf(p)} と連携できませんでした。もう一度お試しください", error = true)
+  Router.query.v.get("integration").foreach { p =>
+    Router.query.v.get("result") match {
+      case Some("connected") => Toasts.show(s"${AppNames.nameOf(p)} と連携しました")
+      case Some("denied")    => Toasts.show(s"${AppNames.nameOf(p)} との連携は許可されませんでした", error = true)
+      case _                 => Toasts.show(s"${AppNames.nameOf(p)} と連携できませんでした。もう一度お試しください", error = true)
     }
     Query.replace()
   }
@@ -35,25 +35,25 @@ def loadIntegrations(s: State): Unit = Api.get[List[IntegrationDto]]("/api/integ
 def connect(p: String): Unit = org.scalajs.dom.window.location.href = s"/api/integrations/$p/connect?returnTo=" + Api.enc("/settings")
 
 def disconnect(s: State, i: IntegrationDto): Unit = Dialog.confirm(s"${i.name} との連携をやめますか？（${i.name} の DM へのアラートの通知が届かなくなります）", "やめる") {
-  Store.report(Api.delete(s"/api/integrations/${i.provider}/connection")) { _ => Store.toast(s"${i.name} との連携をやめました"); loadIntegrations(s) }
+  Toasts.report(Api.delete(s"/api/integrations/${i.provider}/connection")) { _ => Toasts.show(s"${i.name} との連携をやめました"); loadIntegrations(s) }
 }
 
-def loadKeys(s: State): Unit = Store.report(Api.get[List[ApiKeyDto]]("/api/me/keys"))(s.keys := _)
+def loadKeys(s: State): Unit = Toasts.report(Api.get[List[ApiKeyDto]]("/api/me/keys"))(s.keys := _)
 
-def saveMe(s: State): Unit = Store.report(Api.patch[MeDto]("/api/me", UpdateMeReq(Some(s.name.v), Some(s.tz.v)).asJson)) { m =>
-  Store.me := Some(m); Store.toast("保存しました")
+def saveMe(s: State): Unit = Toasts.report(Api.patch[MeDto]("/api/me", UpdateMeReq(Some(s.name.v), Some(s.tz.v)).asJson)) { m =>
+  Store.me := Some(m); Toasts.show("保存しました")
 }
 
 def toggleScope(s: State, sc: String): Unit = s.scopes := (if (s.scopes.v.contains(sc)) s.scopes.v.filterNot(_ == sc) else s.scopes.v :+ sc)
 def scopeOn(s: State, sc: String) = s.scopes.mapC(_.contains(sc))
 
 def create(s: State): Unit =
-  Store.report(Api.post[CreatedKeyDto]("/api/me/keys", CreateKeyReq(s.keyName.v.trim, s.scopes.v, s.days.v.toIntOption).asJson)) { k =>
+  Toasts.report(Api.post[CreatedKeyDto]("/api/me/keys", CreateKeyReq(s.keyName.v.trim, s.scopes.v, s.days.v.toIntOption).asJson)) { k =>
     s.created := Some(k.key); s.keyName := ""; loadKeys(s)
   }
 
 def revoke(s: State, k: ApiKeyDto): Unit = Dialog.confirm(s"APIキー「${k.name}」を失効させますか？（このキーを使っている送り手・AI は使えなくなります）", "失効させる") {
-  Store.report(Api.delete(s"/api/me/keys/${k.id}"))(_ => loadKeys(s))
+  Toasts.report(Api.delete(s"/api/me/keys/${k.id}"))(_ => loadKeys(s))
 }
 
 def base = Store.config.mapC(_.map(_.publicUrl).getOrElse(""))

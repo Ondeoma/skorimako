@@ -20,7 +20,7 @@ def openCustom(s: State): Unit = {
 
 def applyCustom(s: State): Unit = {
   val a = new js.Date(s.from.v).getTime(); val b = new js.Date(s.to.v).getTime()
-  if (a.isNaN || b.isNaN || a >= b) Store.toast("始まりと終わりを正しく入れてください", error = true)
+  if (a.isNaN || b.isNaN || a >= b) Toasts.show("始まりと終わりを正しく入れてください", error = true)
   else { Store.setRange(TimeSel.custom(a, b)); s.open := false }
 }
 

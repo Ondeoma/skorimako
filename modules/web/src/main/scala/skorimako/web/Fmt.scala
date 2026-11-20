@@ -36,11 +36,7 @@ object Fmt {
     else ms(t).take(10)
   }
 
-  def bytes(n: Long): String =
-    if (n < 1024) s"$n B"
-    else if (n < 1024L * 1024) f"${n / 1024.0}%.1f KB"
-    else if (n < 1024L * 1024 * 1024) f"${n / 1024.0 / 1024.0}%.1f MB"
-    else f"${n / 1024.0 / 1024.0 / 1024.0}%.2f GB"
+  export sbirds.web.Formats.bytes
 
   def count(n: Long): String = {
     val s = n.toString

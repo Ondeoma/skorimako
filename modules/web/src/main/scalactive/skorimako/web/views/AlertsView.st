@@ -9,7 +9,7 @@ import java.util.UUID
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
 // アラート: ルールの一覧と状態、履歴、通知先（stui・Slack 互換・Webhook）、送信の記録
-case class State(tab: RV[String] = RV(Query.get("tab").getOrElse("rules")),
+case class State(tab: RV[String] = RV(Router.query.v.get("tab").getOrElse("rules")),
                  rules: RV[List[AlertRuleDto]] = RV(Nil),
                  events: RV[List[AlertEventDto]] = RV(Nil),
                  dests: RV[List[DestinationDto]] = RV(Nil),
@@ -25,7 +25,7 @@ def initState() = State()
 def mounted(s: State): Unit = { pageTitle("アラート"); load(s) }
 
 def load(s: State): Unit = {
-  Store.report(Api.get[List[AlertRuleDto]]("/api/alerts"))(s.rules := _)
+  Toasts.report(Api.get[List[AlertRuleDto]]("/api/alerts"))(s.rules := _)
   Api.get[List[AlertEventDto]]("/api/alerts/events?limit=200").foreach(s.events := _)
   Api.get[List[DestinationDto]]("/api/destinations").foreach(s.dests := _)
   if (Store.admin) Api.get[List[DeliveryDto]]("/api/deliveries?limit=200").foreach(s.deliveries := _)
@@ -47,8 +47,8 @@ def stateLabel(r: AlertRuleDto): String = if (!r.enabled) "停止中" else Alert
 def flags(r: AlertRuleDto): String = List(r.ack.map(a => "👀 " + a.by.map(_.name).getOrElse("")), r.silencedUntil.map(_ => "🔕")).flatten.mkString(" ")
 
 def stuiDm(s: State): Unit = Store.me.v.foreach { me =>
-  Store.report(Api.post[DestinationDto]("/api/destinations", DestinationReq(s"${me.name} の ${AppNames.nameOf("stui")} の DM", DestinationKind.StuiDm, "", None, Some(me.id)).asJson)) { _ =>
-    Store.toast(s"自分の ${AppNames.nameOf("stui")} の DM を通知先に足しました"); load(s)
+  Toasts.report(Api.post[DestinationDto]("/api/destinations", DestinationReq(s"${me.name} の ${AppNames.nameOf("stui")} の DM", DestinationKind.StuiDm, "", None, Some(me.id)).asJson)) { _ =>
+    Toasts.show(s"自分の ${AppNames.nameOf("stui")} の DM を通知先に足しました"); load(s)
   }
 }
 def stuiReady(s: State) = s.integrations.mapC(_.exists(i => i.provider == "stui" && i.connected))
@@ -58,16 +58,16 @@ def canEdit(d: DestinationDto): Boolean = Store.admin || mine(d)
 
 def addSilence(s: State): Unit = {
   val a = new scala.scalajs.js.Date(s.mFrom.v).getTime(); val b = new scala.scalajs.js.Date(s.mTo.v).getTime()
-  if (a.isNaN || b.isNaN || a >= b) Store.toast("始まりと終わりを正しく入れてください", error = true)
-  else Store.report(Api.post[Json]("/api/silences", SilenceReq(None, s.mReason.v.trim, Some(Timestamp(new scala.scalajs.js.Date(a).toISOString())),
+  if (a.isNaN || b.isNaN || a >= b) Toasts.show("始まりと終わりを正しく入れてください", error = true)
+  else Toasts.report(Api.post[Json]("/api/silences", SilenceReq(None, s.mReason.v.trim, Some(Timestamp(new scala.scalajs.js.Date(a).toISOString())),
     Some(Timestamp(new scala.scalajs.js.Date(b).toISOString())), None).asJson)) { _ => s.mReason := ""; load(s) }
 }
-def endSilence(s: State, x: SilenceDto): Unit = Store.report(Api.delete(s"/api/silences/${x.id}"))(_ => load(s))
+def endSilence(s: State, x: SilenceDto): Unit = Toasts.report(Api.delete(s"/api/silences/${x.id}"))(_ => load(s))
 def active(x: SilenceDto): Boolean = x.endsAt.toEpochMilli > scala.scalajs.js.Date.now() && x.startsAt.toEpochMilli <= scala.scalajs.js.Date.now()
 def upcoming(x: SilenceDto): Boolean = x.startsAt.toEpochMilli > scala.scalajs.js.Date.now()
 
 def toggle(s: State, r: AlertRuleDto): Unit =
-  Store.report(Api.put[AlertRuleDto](s"/api/alerts/${r.id}", r.toReq.copy(enabled = !r.enabled).asJson))(_ => load(s))
+  Toasts.report(Api.put[AlertRuleDto](s"/api/alerts/${r.id}", r.toReq.copy(enabled = !r.enabled).asJson))(_ => load(s))
 
 def editDest(s: State, d: Option[DestinationDto]): Unit = {
   s.dName := d.map(_.name).getOrElse(""); s.dKind := d.map(_.kind).getOrElse(DestinationKind.Stui); s.dUrl := d.map(_.url).getOrElse(""); s.dSecret := ""
@@ -81,13 +81,13 @@ def saveDest(s: State): Unit = s.editing.v.foreach { id =>
     case Some(x) => Api.put[DestinationDto](s"/api/destinations/$x", req)
     case None    => Api.post[DestinationDto]("/api/destinations", req)
   }
-  Store.report(f) { _ => s.editing := None; load(s) }
+  Toasts.report(f) { _ => s.editing := None; load(s) }
 }
 
-def test(d: DestinationDto): Unit = Store.report(Api.post[Json](s"/api/destinations/${d.id}/test"))(_ => Store.toast(s"「${d.name}」に試しに送りました"))
+def test(d: DestinationDto): Unit = Toasts.report(Api.post[Json](s"/api/destinations/${d.id}/test"))(_ => Toasts.show(s"「${d.name}」に試しに送りました"))
 
 def removeDest(s: State, d: DestinationDto): Unit = Dialog.confirm(s"通知先「${d.name}」を削除しますか？（ルールからも外れます）", "削除する") {
-  Store.report(Api.delete(s"/api/destinations/${d.id}"))(_ => load(s))
+  Toasts.report(Api.delete(s"/api/destinations/${d.id}"))(_ => load(s))
 }
 
 def evIcon(e: AlertEventDto): String = e.state match { case "firing" => "🔴"; case "resolved" => "✅"; case "acknowledged" => "👀"; case _ => "⚠️" }

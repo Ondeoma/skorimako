@@ -34,9 +34,11 @@ val routes: PathPatternRoutes = List(
 
 def mounted(s: State): Unit = {
   Fallback.install(routes)
+  // 画面を移ったら、スマホの幅のサイドバーを閉じる
+  Router.afterEach((_, _) => Store.sideOpen := false)
   Api.clientConfig().foreach(c => Store.config := Some(c))
   if (dom.window.location.pathname.startsWith("/login")) s.ready := true
-  else Store.report(Api.me()) { me =>
+  else Toasts.report(Api.me()) { me =>
     Store.me := Some(me)
     AppNames.set(me.appNames)
     s.ready := true
@@ -57,10 +59,6 @@ val nav: List[(String, String, String)] = List(
   ("/streams", "🗂", "ストリーム"),
 )
 
-def navCls(path: String) = Router.href.mapC { h =>
-  val p = new dom.URL(h).pathname
-  if (p == path || (path != "/" && p.startsWith(path + "/"))) "item active" else "item"
-}
 def userName = Store.me.mapC(_.map(_.name).getOrElse(""))
 def loggedIn = Store.me.mapC(_.isDefined)
 def sideClass = Store.sideOpen.mapC(o => if (o) "side open" else "side")
@@ -69,13 +67,13 @@ def sideClass = Store.sideOpen.mapC(o => if (o) "side open" else "side")
 <template>
   <div class="shell">
     <aside v-if="loggedIn" :class="sideClass">
-      <a href="/" class="brand" @click.prevent='Store.go("/")'><img :src='AppNames.logo("/logo.svg").v' alt="" height="28" class="brand-logo"><span>{{ AppNames.self }}</span></a>
+      <RouterLink to="/" class="brand"><img :src='AppNames.logo("/logo.svg").v' alt="" height="28" class="brand-logo"><span>{{ AppNames.self }}</span></RouterLink>
       <nav class="scroll">
-        <a v-for="n in nav" :href="n._1" :class="navCls(n._1)" @click.prevent="Store.go(n._1)"><span class="ic">{{ n._2 }}</span><span class="name">{{ n._3 }}</span></a>
+        <RouterLink v-for="n in nav" :to="n._1" class="item" active-class="active"><span class="ic">{{ n._2 }}</span><span class="name">{{ n._3 }}</span></RouterLink>
       </nav>
       <div class="foot">
-        <a href="/settings" :class='navCls("/settings")' @click.prevent='Store.go("/settings")'><span class="ic">⚙️</span><span class="name">設定・APIキー</span></a>
-        <a v-if="Store.isAdmin" href="/admin" :class='navCls("/admin")' @click.prevent='Store.go("/admin")'><span class="ic">🛡</span><span class="name">管理</span></a>
+        <RouterLink to="/settings" class="item" active-class="active"><span class="ic">⚙️</span><span class="name">設定・APIキー</span></RouterLink>
+        <RouterLink v-if="Store.isAdmin" to="/admin" class="item" active-class="active"><span class="ic">🛡</span><span class="name">管理</span></RouterLink>
         <div class="me"><span class="name">{{ userName }}</span><button class="ghost small" @click="logout()">ログアウト</button></div>
       </div>
     </aside>
@@ -86,17 +84,12 @@ def sideClass = Store.sideOpen.mapC(o => if (o) "side open" else "side")
         <img :src='AppNames.logo("/logo.svg").v' alt="" height="24" class="brand-logo"><b>{{ AppNames.self }}</b>
       </header>
       <main class="content">
-        <RouterComponent v-if="s.ready" :routes="routes" />
+        <RouterComponent v-if="s.ready" :routes="routes" :reloadOnQueryChange="false" />
       </main>
     </div>
   </div>
   <DialogHost />
-  <div class="toasts">
-    <div v-for="t in Store.toasts" :key="t.id" :class='if (t.error) "toast error" else "toast"'>
-      <span class="grow" @click="t.link.foreach(l => Store.go(l)); Store.dismiss(t.id)">{{ t.text }}</span>
-      <button @click="Store.dismiss(t.id)">×</button>
-    </div>
-  </div>
+  <ToastHost />
 </template>
 
 <style scoped>

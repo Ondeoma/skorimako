@@ -31,7 +31,7 @@ def mounted(s: State): Unit = {
   Store.onReload(load(s))
 }
 
-def loadApps(s: State): Unit = Store.report(Api.get[List[RumAppDto]]("/api/rum/apps")) { as =>
+def loadApps(s: State): Unit = Toasts.report(Api.get[List[RumAppDto]]("/api/rum/apps")) { as =>
   s.apps := as
   if (!as.exists(_.id.toString == s.app.v)) s.app := as.headOption.map(_.id.toString).getOrElse("")
   if (as.isEmpty) s.tab := "apps" else load(s)
@@ -94,13 +94,13 @@ def grade(s: State, k: String, good: Double, poor: Double) = s.kpi.mapC(m => m.g
 
 def create(s: State): Unit = {
   val origins = s.newOrigins.v.split("[,\\s]+").toList.map(_.trim).filter(_.nonEmpty)
-  Store.report(Api.post[RumAppDto]("/api/rum/apps", RumAppReq(s.newName.v.trim, origins, None).asJson)) { a =>
+  Toasts.report(Api.post[RumAppDto]("/api/rum/apps", RumAppReq(s.newName.v.trim, origins, None).asJson)) { a =>
     s.newName := ""; s.newOrigins := ""; s.app := a.id.toString; Prefs.set("rum.app", s.app.v); loadApps(s)
   }
 }
 
 def remove(s: State, a: RumAppDto): Unit = Dialog.confirm(s"アプリ「${a.name}」を削除しますか？（送られてくるイベントを受け付けなくなります。集めたデータは残ります）", "削除する") {
-  Store.report(Api.delete(s"/api/rum/apps/${a.id}"))(_ => loadApps(s))
+  Toasts.report(Api.delete(s"/api/rum/apps/${a.id}"))(_ => loadApps(s))
 }
 
 def snippet(a: RumAppDto): String = {

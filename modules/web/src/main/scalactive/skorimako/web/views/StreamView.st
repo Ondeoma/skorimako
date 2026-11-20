@@ -18,7 +18,7 @@ def initState() = State()
 
 def mounted(s: State, props: Props): Unit = { pageTitle(props.name); load(s, props) }
 
-def load(s: State, props: Props): Unit = Store.report(Api.stream(props.streamType, props.name)) { d =>
+def load(s: State, props: Props): Unit = Toasts.report(Api.stream(props.streamType, props.name)) { d =>
   s.d := Some(d); s.retention := d.stream.retentionDays.toString; s.description := d.stream.description
   s.groups := d.stream.allowedGroups.mkString(", "); s.maxRows := d.stream.maxRowsPerMinute.map(_.toString).getOrElse("")
   if (Store.admin) loadRules(s, props)
@@ -30,15 +30,15 @@ def loadRules(s: State, props: Props): Unit = Api.get[List[IngestRuleDto]]("/api
 def addRule(s: State, props: Props): Unit = {
   val r = IngestRuleReq(props.streamType, if (s.all.v) "*" else props.name, s.rules.v.size, s.kind.v, s.field.v.trim, s.pattern.v.trim,
     s.replacement.v, s.ratio.v.toDoubleOption.getOrElse(1.0), true)
-  Store.report(Api.post[io.circe.Json]("/api/ingest/rules", r.asJson)) { _ => Store.toast("変換を足しました（30秒以内にすべてのノードで効きます）"); loadRules(s, props) }
+  Toasts.report(Api.post[io.circe.Json]("/api/ingest/rules", r.asJson)) { _ => Toasts.show("変換を足しました（30秒以内にすべてのノードで効きます）"); loadRules(s, props) }
 }
 
 def toggleRule(s: State, props: Props, r: IngestRuleDto): Unit =
-  Store.report(Api.putUnit(s"/api/ingest/rules/${r.id}", IngestRuleReq(r.streamType, r.stream, r.position, r.kind, r.field, r.pattern, r.replacement,
+  Toasts.report(Api.putUnit(s"/api/ingest/rules/${r.id}", IngestRuleReq(r.streamType, r.stream, r.position, r.kind, r.field, r.pattern, r.replacement,
     r.ratio, !r.enabled).asJson))(_ => loadRules(s, props))
 
 def removeRule(s: State, props: Props, r: IngestRuleDto): Unit = Dialog.confirm("この変換を削除しますか？", "削除する") {
-  Store.report(Api.delete(s"/api/ingest/rules/${r.id}"))(_ => loadRules(s, props))
+  Toasts.report(Api.delete(s"/api/ingest/rules/${r.id}"))(_ => loadRules(s, props))
 }
 
 def describe(r: IngestRuleDto): String = r.kind match {
@@ -52,14 +52,14 @@ def describe(r: IngestRuleDto): String = r.kind match {
 def isKind(s: State, k: String) = s.kind.mapC(_ == k)
 
 def save(s: State, props: Props): Unit =
-  Store.report(Api.patchUnit(s"/api/streams/${props.streamType}/${Api.enc(props.name)}",
+  Toasts.report(Api.patchUnit(s"/api/streams/${props.streamType}/${Api.enc(props.name)}",
     UpdateStreamReq(s.retention.v.toIntOption, Some(s.description.v), Some(s.groups.v.split(",").toList.map(_.trim).filter(_.nonEmpty)),
-      Some(s.maxRows.v.trim.toIntOption.getOrElse(0))).asJson)) { _ => Store.toast("保存しました"); load(s, props) }
+      Some(s.maxRows.v.trim.toIntOption.getOrElse(0))).asJson)) { _ => Toasts.show("保存しました"); load(s, props) }
 
 def remove(props: Props): Unit =
   Dialog.prompt(s"ストリーム ${props.name} とすべてのデータを削除します。元に戻せません。\n確認のため名前を入力してください。", "", "完全に削除する") { n =>
-    if (n.trim == props.name) Store.report(Api.delete(s"/api/streams/${props.streamType}/${Api.enc(props.name)}"))(_ => Store.go("/streams"))
-    else Store.toast("名前が一致しないため削除しませんでした", error = true)
+    if (n.trim == props.name) Toasts.report(Api.delete(s"/api/streams/${props.streamType}/${Api.enc(props.name)}"))(_ => Store.go("/streams"))
+    else Toasts.show("名前が一致しないため削除しませんでした", error = true)
   }
 
 def open(props: Props): Unit = props.streamType match {

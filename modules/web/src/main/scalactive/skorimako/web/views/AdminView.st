@@ -12,7 +12,7 @@ case class State(tab: RV[String] = RV("users"), users: RV[List[UserDto]] = RV(Ni
 def initState() = State()
 
 def load(s: State): Unit = {
-  Store.report(Api.get[List[UserDto]]("/api/admin/users" + Api.query("q" -> Some(s.q.v))))(s.users := _)
+  Toasts.report(Api.get[List[UserDto]]("/api/admin/users" + Api.query("q" -> Some(s.q.v))))(s.users := _)
   Api.get[List[AuditDto]]("/api/admin/audit?limit=300").foreach(s.audit := _)
   Api.get[Map[String, Long]]("/api/ingest/pending").foreach(s.pending := _)
   Api.get[List[io.circe.Json]]("/api/nodes").foreach(s.nodes := _)
@@ -21,7 +21,7 @@ def load(s: State): Unit = {
 def mounted(s: State): Unit = { pageTitle("管理"); load(s) }
 
 def setUser(s: State, u: UserDto, admin: Option[Boolean], disabled: Option[Boolean]): Unit =
-  Store.report(Api.patchUnit(s"/api/admin/users/${u.id}", UpdateUserReq(admin, disabled).asJson))(_ => load(s))
+  Toasts.report(Api.patchUnit(s"/api/admin/users/${u.id}", UpdateUserReq(admin, disabled).asJson))(_ => load(s))
 
 def tab(s: State, v: String) = s.tab.mapC(x => if (x == v) "active" else "")
 def isTab(s: State, v: String) = s.tab.mapC(_ == v)

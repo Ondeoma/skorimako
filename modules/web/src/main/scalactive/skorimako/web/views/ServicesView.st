@@ -15,7 +15,7 @@ case class State(map: RV[Option[ServiceMapDto]] = RV(None),
 
 def initState() = State()
 
-def mounted(s: State): Unit = { pageTitle("サービス"); Query.get("service").foreach(Store.setService); load(s); Store.onReload(load(s)) }
+def mounted(s: State): Unit = { pageTitle("サービス"); Router.query.v.get("service").foreach(Store.setService); load(s); Store.onReload(load(s)) }
 
 def load(s: State): Unit = {
   val (start, end) = Store.range.v.micros

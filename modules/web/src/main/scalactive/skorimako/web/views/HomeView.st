@@ -10,7 +10,7 @@ def initState() = State()
 
 def mounted(s: State): Unit = { pageTitle("ホーム"); load(s) }
 
-def load(s: State): Unit = Store.report(Api.get[OverviewDto]("/api/overview"))(o => s.o := Some(o))
+def load(s: State): Unit = Toasts.report(Api.get[OverviewDto]("/api/overview"))(o => s.o := Some(o))
 
 def streams(s: State) = s.o.mapC(_.map(_.streams).getOrElse(Nil))
 def firing(s: State) = s.o.mapC(_.map(_.firing).getOrElse(Nil))

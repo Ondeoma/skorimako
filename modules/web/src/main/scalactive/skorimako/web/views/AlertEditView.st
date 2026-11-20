@@ -13,12 +13,12 @@ case class Props(ruleId: Option[UUID])
 case class State(name: RV[String] = RV(""),
                  description: RV[String] = RV(""),
                  enabled: RV[Boolean] = RV(true),
-                 streamType: RV[String] = RV(Query.get("type").getOrElse(StreamType.Logs)),
-                 stream: RV[String] = RV(Query.get("stream").getOrElse("default")),
+                 streamType: RV[String] = RV(Router.query.v.get("type").getOrElse(StreamType.Logs)),
+                 stream: RV[String] = RV(Router.query.v.get("stream").getOrElse("default")),
                  mode: RV[String] = RV(AlertMode.Threshold),
-                 where: RV[String] = RV(Query.get("where").getOrElse("")),
-                 agg: RV[String] = RV(Query.get("agg").getOrElse("count")),
-                 field: RV[String] = RV(Query.get("field").getOrElse("")),
+                 where: RV[String] = RV(Router.query.v.get("where").getOrElse("")),
+                 agg: RV[String] = RV(Router.query.v.get("agg").getOrElse("count")),
+                 field: RV[String] = RV(Router.query.v.get("field").getOrElse("")),
                  groupBy: RV[String] = RV(""),
                  sql: RV[String] = RV(""),
                  op: RV[String] = RV(">"),
@@ -47,7 +47,7 @@ def mounted(s: State, props: Props): Unit = {
   }
   props.ruleId match {
     case Some(id) =>
-      Store.report(Api.get[AlertRuleDto](s"/api/alerts/$id")) { r => fill(s, r); loadStreams(s) }
+      Toasts.report(Api.get[AlertRuleDto](s"/api/alerts/$id")) { r => fill(s, r); loadStreams(s) }
       Api.get[List[AlertEventDto]](s"/api/alerts/events?ruleId=$id&limit=100").foreach(s.events := _)
     case None =>
       if (s.sql.v.isEmpty) s.sql := defaultSql(s)
@@ -101,13 +101,13 @@ def save(s: State, props: Props): Unit = {
     case None     => Api.post[AlertRuleDto]("/api/alerts", req(s).asJson)
   }
   f.onComplete {
-    case Success(r) => Store.toast("保存しました"); if (props.ruleId.isEmpty) Store.go(s"/alerts/${r.id}") else fill(s, r)
+    case Success(r) => Toasts.show("保存しました"); if (props.ruleId.isEmpty) Store.go(s"/alerts/${r.id}") else fill(s, r)
     case Failure(e) => s.error := e.getMessage
   }
 }
 
 def remove(props: Props): Unit = props.ruleId.foreach { id =>
-  Dialog.confirm("このルールを削除しますか？（履歴も消えます）", "削除する") { Store.report(Api.delete(s"/api/alerts/$id"))(_ => Store.go("/alerts")) }
+  Dialog.confirm("このルールを削除しますか？（履歴も消えます）", "削除する") { Toasts.report(Api.delete(s"/api/alerts/$id"))(_ => Store.go("/alerts")) }
 }
 
 def reload(s: State, props: Props): Unit = props.ruleId.foreach { id =>
@@ -116,20 +116,20 @@ def reload(s: State, props: Props): Unit = props.ruleId.foreach { id =>
 }
 
 def ack(s: State, props: Props): Unit = props.ruleId.foreach { id =>
-  Store.report(Api.post[AlertRuleDto](s"/api/alerts/$id/ack", AckReq(s.note.v.trim).asJson)) { _ => s.note := ""; Store.toast("対応中にしました"); reload(s, props) }
+  Toasts.report(Api.post[AlertRuleDto](s"/api/alerts/$id/ack", AckReq(s.note.v.trim).asJson)) { _ => s.note := ""; Toasts.show("対応中にしました"); reload(s, props) }
 }
 
-def unack(s: State, props: Props): Unit = props.ruleId.foreach { id => Store.report(Api.delete(s"/api/alerts/$id/ack"))(_ => reload(s, props)) }
+def unack(s: State, props: Props): Unit = props.ruleId.foreach { id => Toasts.report(Api.delete(s"/api/alerts/$id/ack"))(_ => reload(s, props)) }
 
 def mute(s: State, props: Props, minutes: Int): Unit = props.ruleId.foreach { id =>
-  Store.report(Api.post[io.circe.Json]("/api/silences", SilenceReq(Some(id), "", None, None, Some(minutes)).asJson)) { _ =>
-    Store.toast(s"${minutes / 60}時間ミュートしました（評価と履歴は続けます）"); reload(s, props)
+  Toasts.report(Api.post[io.circe.Json]("/api/silences", SilenceReq(Some(id), "", None, None, Some(minutes)).asJson)) { _ =>
+    Toasts.show(s"${minutes / 60}時間ミュートしました（評価と履歴は続けます）"); reload(s, props)
   }
 }
 
 def unmute(s: State, props: Props): Unit = props.ruleId.foreach { id =>
   Api.get[List[SilenceDto]]("/api/silences").foreach(_.filter(_.ruleId.contains(id)).foreach(x =>
-    Store.report(Api.delete(s"/api/silences/${x.id}"))(_ => reload(s, props))))
+    Toasts.report(Api.delete(s"/api/silences/${x.id}"))(_ => reload(s, props))))
 }
 
 def acked(s: State) = s.rule.mapC(_.flatMap(_.ack).toList)

@@ -3,39 +3,43 @@ import skorimako.web.*
 import skorimako.web.parts.*
 import skorimako.shared.*
 
+import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.util.{Failure, Success}
 
 // メトリクス: 左で選び、集計（平均・合計・rate・パーセンタイル）・ラベルでの分け方・条件・区切りを決めてグラフにする.
-case class State(metrics: RV[List[StreamDto]] = RV(Nil),
+case class State(res: AsyncState[(MetricResultDto, ChartSpec)],
+                 metrics: RV[List[StreamDto]] = RV(Nil),
                  q: RV[String] = RV(""),
-                 metric: RV[String] = RV(Query.get("metric").getOrElse("")),
+                 metric: RV[String] = RV(Router.query.v.get("metric").getOrElse("")),
                  info: RV[Option[StreamDto]] = RV(None),
                  labels: RV[List[String]] = RV(Nil),
                  agg: RV[String] = RV("avg"),
                  groupBy: RV[List[String]] = RV(Nil),
                  where: RV[String] = RV(""),
                  step: RV[String] = RV(""),
-                 result: RV[Option[MetricResultDto]] = RV(None),
                  chart: RV[ChartSpec] = RV(ChartSpec("line", Nil)),
-                 loading: RV[Boolean] = RV(false),
-                 error: RV[String] = RV(""),
                  showSql: RV[Boolean] = RV(false),
-                 mode: RV[String] = RV(if (Query.get("promql").isDefined) "promql" else "builder"),
-                 promql: RV[String] = RV(Query.get("promql").getOrElse("")),
+                 mode: RV[String] = RV(if (Router.query.v.get("promql").isDefined) "promql" else "builder"),
+                 promql: RV[String] = RV(Router.query.v.get("promql").getOrElse("")),
                  promChart: RV[ChartSpec] = RV(ChartSpec("line", Nil, height = 320)),
                  promError: RV[String] = RV(""),
                  services: RV[Map[String, List[String]]] = RV(Map.empty))
 
-def initState() = State()
+// 結果（とグラフ）は run で読み直す（古い応答は捨てる）
+def initState() = {
+  lazy val s: State = State(useAsync(fetch(s), immediate = false))
+  s
+}
 
 val notLabels = Set(Columns.Timestamp, "value", "__name__", "__type__")
 
 def mounted(s: State): Unit = {
   pageTitle("メトリクス")
-  Query.get("service").foreach(Store.setService)
+  watch(s.res.data, false)((_, d) => d.foreach(x => s.chart := x._2))
+  Router.query.v.get("service").foreach(Store.setService)
   Api.metricServices.foreach(s.services := _)
-  Store.report(Api.streams(Some(StreamType.Metrics))) { ms =>
+  Toasts.report(Api.streams(Some(StreamType.Metrics))) { ms =>
     s.metrics := ms
     if (s.metric.v.isEmpty) ms.headOption.foreach(m => s.metric := m.name)
     if (s.metric.v.nonEmpty) select(s, s.metric.v)
@@ -93,16 +97,15 @@ def select(s: State, name: String): Unit = {
   run(s)
 }
 
-def run(s: State): Unit = if (s.metric.v.nonEmpty) {
+def run(s: State): Unit = if (s.metric.v.nonEmpty) s.res.reload()
+
+def fetch(s: State): Future[(MetricResultDto, ChartSpec)] = {
   val (start, end) = Store.range.v.micros
-  s.loading := true; s.error := ""
   val unit = s.info.v.map(_.unit).getOrElse("")
-  Api.metrics(MetricQueryReq(s.metric.v, start, end, s.agg.v, s.groupBy.v, Some(Store.serviceWhere(s.where.v)), s.step.v.toIntOption)).onComplete {
-    case Success(r) =>
-      s.loading := false; s.result := Some(r)
-      s.chart := ChartSpec("line", r.series.map(x => ChartSeries(label(x), x.points.map(p => (p.t / 1000.0, p.v)))), unit = if (s.agg.v == "rate") (if (unit.isEmpty || unit == "1") "/s" else unit + "/s") else unit,
-        height = 300, onSelect = Some((a, b) => Store.setRange(TimeSel.custom(a, b))))
-    case Failure(e) => s.loading := false; s.error := e.getMessage
+  val agg = s.agg.v
+  Api.metrics(MetricQueryReq(s.metric.v, start, end, agg, s.groupBy.v, Some(Store.serviceWhere(s.where.v)), s.step.v.toIntOption)).map { r =>
+    r -> ChartSpec("line", r.series.map(x => ChartSeries(label(x), x.points.map(p => (p.t / 1000.0, p.v)))), unit = if (agg == "rate") (if (unit.isEmpty || unit == "1") "/s" else unit + "/s") else unit,
+      height = 300, onSelect = Some((a, b) => Store.setRange(TimeSel.custom(a, b))))
   }
 }
 
@@ -119,7 +122,7 @@ def filtered(s: State) = computed {
 def servicesOf(s: State, name: String) = s.services.mapC(_.getOrElse(name, Nil).mkString(" · "))
 def itemCls(s: State, n: String) = s.metric.mapC(m => if (m == n) "list-item active" else "list-item")
 def groupCls(s: State, l: String) = s.groupBy.mapC(g => if (g.contains(l)) "chip active" else "chip")
-def series(s: State) = s.result.mapC(_.map(_.series).getOrElse(Nil))
+def series(s: State) = s.res.data.mapC(_.map(_._1.series).getOrElse(Nil))
 def last(x: SeriesDto): String = x.points.reverse.find(_.v.isDefined).flatMap(_.v).map(v => Fmt.num(v)).getOrElse("-")
 def maxOf(x: SeriesDto): String = x.points.flatMap(_.v).maxOption.map(v => Fmt.num(v)).getOrElse("-")
 def avgOf(x: SeriesDto): String = { val vs = x.points.flatMap(_.v); if (vs.isEmpty) "-" else Fmt.num(vs.sum / vs.size) }
@@ -176,9 +179,9 @@ def typeLabel(t: String): String = t match {
         </form>
         <div v-if="s.labels.mapC(_.nonEmpty)" class="chips groups"><span class="muted small">ラベルで分ける:</span>
           <button v-for="l in s.labels" :class="groupCls(s, l)" @click="toggleGroup(s, l)">{{ l }}</button></div>
-        <p v-if="s.error.mapC(_.nonEmpty)" class="error mono">{{ s.error }}</p>
+        <p v-if="s.res.failed" class="error mono">{{ s.res.errorMessage }}</p>
         <Chart :spec="s.chart" />
-        <p class="muted small" v-if="s.loading">読み込み中…</p>
+        <p class="muted small" v-if="s.res.loading">読み込み中…</p>
         <div class="table-wrap series">
           <table class="list">
             <thead><tr><th>系列</th><th>最後</th><th>平均</th><th>最大</th><th></th></tr></thead>
@@ -190,7 +193,7 @@ def typeLabel(t: String): String = t match {
           <a class="btn small" :href="alertLink(s)" @click.prevent="Store.go(alertLink(s))">🔔 このメトリクスでアラートを作る</a>
           <button class="small ghost" @click="s.showSql := !s.showSql.v">SQL を見る</button>
         </p>
-        <pre v-if="s.showSql" class="code">{{ s.result.mapC(_.map(_.sql).getOrElse("")) }}</pre>
+        <pre v-if="s.showSql" class="code">{{ s.res.data.mapC(_.map(_._1.sql).getOrElse("")) }}</pre>
       </div>
     </div>
     </div>

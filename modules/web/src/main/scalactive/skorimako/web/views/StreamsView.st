@@ -8,7 +8,7 @@ case class State(list: RV[List[StreamDto]] = RV(Nil), t: RV[String] = RV(""), q:
 
 def initState() = State()
 
-def mounted(s: State): Unit = { pageTitle("ストリーム"); Store.report(Api.streams())(s.list := _) }
+def mounted(s: State): Unit = { pageTitle("ストリーム"); Toasts.report(Api.streams())(s.list := _) }
 
 def shown(s: State) = computed { val q = s.q.v.trim.toLowerCase; s.list.v.filter(x => (s.t.v.isEmpty || x.streamType == s.t.v) && (q.isEmpty || x.name.contains(q))) }
 def total(s: State) = shown(s).mapC(xs => s"${xs.size} 件・${Fmt.count(xs.map(_.docCount).sum)} 行・${Fmt.bytes(xs.map(_.storedBytes).sum)}")

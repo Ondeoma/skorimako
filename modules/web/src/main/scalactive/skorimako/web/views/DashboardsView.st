@@ -11,7 +11,7 @@ def initState() = State()
 
 def mounted(s: State): Unit = { pageTitle("ダッシュボード"); load(s) }
 
-def load(s: State): Unit = Store.report(Api.get[List[DashboardBrief]]("/api/dashboards"))(s.list := _)
+def load(s: State): Unit = Toasts.report(Api.get[List[DashboardBrief]]("/api/dashboards"))(s.list := _)
 
 def sample: List[PanelDto] = List(
   PanelDto("p1", "ログの件数", PanelKind.Bar, StreamType.Logs,
@@ -21,7 +21,7 @@ def sample: List[PanelDto] = List(
     "SELECT service_name, count(*) AS n FROM \"default\" GROUP BY 1 ORDER BY 2 DESC LIMIT 20", 4, ""))
 
 def create(s: State): Unit = Dialog.prompt("ダッシュボードの名前", "", "作る") { n =>
-  if (n.trim.nonEmpty) Store.report(Api.post[DashboardDto]("/api/dashboards", DashboardReq(n.trim, "", sample).asJson))(d => Store.go(s"/dashboards/${d.id}"))
+  if (n.trim.nonEmpty) Toasts.report(Api.post[DashboardDto]("/api/dashboards", DashboardReq(n.trim, "", sample).asJson))(d => Store.go(s"/dashboards/${d.id}"))
 }
 </script>
 
