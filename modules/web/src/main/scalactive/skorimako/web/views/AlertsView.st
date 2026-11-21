@@ -8,7 +8,7 @@ import io.circe.syntax.*
 import java.util.UUID
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
-// アラート: ルールの一覧と状態、履歴、通知先（stui・Slack 互換・Webhook）、送信の記録
+// アラート: ルールの一覧と状態、履歴、通知先（stui のチャンネル・受信 Webhook・DM、メール、Slack 互換・Webhook）、送信の記録
 case class State(tab: RV[String] = RV(Router.query.v.get("tab").getOrElse("rules")),
                  rules: RV[List[AlertRuleDto]] = RV(Nil),
                  events: RV[List[AlertEventDto]] = RV(Nil),
@@ -18,6 +18,7 @@ case class State(tab: RV[String] = RV(Router.query.v.get("tab").getOrElse("rules
                  integrations: RV[List[IntegrationDto]] = RV(Nil),
                  mReason: RV[String] = RV(""), mFrom: RV[String] = RV(""), mTo: RV[String] = RV(""),
                  editing: RV[Option[Option[UUID]]] = RV(None),
+                 channels: RV[List[StuiChannelDto]] = RV(Nil),
                  dName: RV[String] = RV(""), dKind: RV[String] = RV(DestinationKind.Stui), dUrl: RV[String] = RV(""), dSecret: RV[String] = RV(""))
 
 def initState() = State()
@@ -30,7 +31,11 @@ def load(s: State): Unit = {
   Api.get[List[DestinationDto]]("/api/destinations").foreach(s.dests := _)
   if (Store.admin) Api.get[List[DeliveryDto]]("/api/deliveries?limit=200").foreach(s.deliveries := _)
   Api.get[List[SilenceDto]]("/api/silences?all=true").foreach(s.silences := _)
-  Api.get[List[IntegrationDto]]("/api/integrations").foreach(s.integrations := _)
+  Api.get[List[IntegrationDto]]("/api/integrations").foreach { is =>
+    s.integrations := is
+    // stui と連携していれば、チャンネルの通知先の表示と選択のために、参加しているチャンネルを読む
+    if (is.exists(i => i.provider == "stui" && i.connected)) Api.get[List[StuiChannelDto]]("/api/integrations/stui/channels").foreach(s.channels := _)
+  }
 }
 
 def cond(r: AlertRuleDto): String =
@@ -70,7 +75,8 @@ def toggle(s: State, r: AlertRuleDto): Unit =
   Toasts.report(Api.put[AlertRuleDto](s"/api/alerts/${r.id}", r.toReq.copy(enabled = !r.enabled).asJson))(_ => load(s))
 
 def editDest(s: State, d: Option[DestinationDto]): Unit = {
-  s.dName := d.map(_.name).getOrElse(""); s.dKind := d.map(_.kind).getOrElse(DestinationKind.Stui); s.dUrl := d.map(_.url).getOrElse(""); s.dSecret := ""
+  val kind = d.map(_.kind).getOrElse(if (stuiReady(s).v) DestinationKind.StuiChannel else DestinationKind.Stui)
+  s.dName := d.map(_.name).getOrElse(""); s.dKind := kind; s.dUrl := d.map(_.url).getOrElse(""); s.dSecret := ""
   s.editing := Some(d.map(_.id))
 }
 
@@ -96,6 +102,18 @@ def isTab(s: State, t: String) = s.tab.mapC(_ == t)
 def setTab(s: State, t: String): Unit = { s.tab := t; Query.replace("tab" -> Some(t)) }
 def isWebhook(s: State) = s.dKind.mapC(_ == DestinationKind.Webhook)
 def isStui(s: State) = s.dKind.mapC(_ == DestinationKind.Stui)
+def isChannel(s: State) = s.dKind.mapC(_ == DestinationKind.StuiChannel)
+def isEmail(s: State) = s.dKind.mapC(_ == DestinationKind.Email)
+def isUrl(s: State) = s.dKind.mapC(k => k != DestinationKind.StuiChannel && k != DestinationKind.Email)
+// 選べる種類（stui のチャンネルは連携しているときだけ. 編集中の通知先の種類は残す）
+def kinds(s: State) = s.integrations.mapC(_ => DestinationKind.all.filter(k => k != DestinationKind.StuiDm && (k != DestinationKind.StuiChannel || stuiReady(s).v || s.dKind.v == k)))
+def kindLabel(k: String): String = DestinationKind.label(k, AppNames.nameOf("stui"))
+// 通知先の行に出す宛先（stui のチャンネルは名前、DM は出さない）
+def where(s: State, d: DestinationDto): String = d.kind match {
+  case DestinationKind.StuiChannel => s.channels.v.find(_.id == d.url).map("#" + _.name).getOrElse("（参加していないチャンネル）")
+  case DestinationKind.StuiDm => ""
+  case _ => d.url
+}
 def status(d: DeliveryDto): String = d.status match { case "sent" => "送信済み"; case "pending" => "送信待ち"; case "failed" => "失敗"; case "skipped" => "送らなかった"; case x => x }
 </script>
 
@@ -139,12 +157,14 @@ def status(d: DeliveryDto): String = d.status match { case "sent" => "送信済�
 
     <div v-if='isTab(s, "dests")'>
       <div class="hint">
-        <b>{{ AppNames.of("stui") }} に知らせる</b>: {{ AppNames.of("stui") }} のチャンネルの ⚙ →「連携・定期メッセージ」で受信 Webhook を作り、表示された URL を貼ります。発生・解消をそのチャンネルに投稿します。<br>
+        <b>{{ AppNames.of("stui") }} のチャンネル</b>: 設定で {{ AppNames.of("stui") }} と連携すると、自分が参加しているチャンネルを選べます。通知先を保存した人の連携で、{{ AppNames.of("stui") }} のボットとして投稿します。<br>
+        <b>{{ AppNames.of("stui") }}（受信 Webhook）</b>: {{ AppNames.of("stui") }} のチャンネルの ⚙ →「連携・定期メッセージ」で受信 Webhook を作り、表示された URL を貼ります。<br>
+        <b>メール</b>: 宛先のアドレスに送ります（カンマ区切りで {{ DestinationKind.MaxEmails }} 件まで）。<br>
         <b>Slack・Mattermost 互換</b>: Incoming Webhook の URL。<b>Webhook</b>: JSON を POST します（署名の鍵を決めると <code>X-Skorimako-Signature: sha256=…</code> を付けます）。
       </div>
       <div v-for="d in s.dests" :key="d.id" class="panel row">
-        <b>{{ d.name }}</b><span class="badge">{{ DestinationKind.label(d.kind, AppNames.nameOf("stui")) }}</span><span class="muted small grow url">{{ d.url }}</span>
-        <span v-for="u in d.targetUser.toList" class="small">→ {{ u.name }}</span>
+        <b>{{ d.name }}</b><span class="badge">{{ kindLabel(d.kind) }}</span><span class="muted small grow url">{{ s.channels.mapC(_ => where(s, d)) }}</span>
+        <span v-for="u in d.targetUser.toList" class="small">{{ if (d.kind == DestinationKind.StuiChannel) "連携: " + u.name else "→ " + u.name }}</span>
         <template v-if="canEdit(d)">
           <button class="small" @click="test(d)">試しに送る</button>
           <button class="small" @click="editDest(s, Some(d))">編集</button>
@@ -195,8 +215,13 @@ def status(d: DeliveryDto): String = d.status match { case "sent" => "送信済�
     <Modal v-for="e in s.editing.mapC(_.toList)" :onClose="_ => s.editing := None">
       <h2>{{ if (e.isDefined) "通知先を変える" else "通知先を追加" }}</h2>
       <label class="field"><span>名前</span><input type="text" v-model="s.dName" :placeholder='AppNames.nameOf("stui") + " #運用"'></label>
-      <label class="field"><span>種類</span><select v-model="s.dKind"><option v-for="k in DestinationKind.all.filterNot(_ == DestinationKind.StuiDm)" :value="k">{{ DestinationKind.label(k, AppNames.nameOf("stui")) }}</option></select></label>
-      <label class="field"><span>URL</span><input type="url" v-model="s.dUrl" placeholder="https://stui.example.com/hooks/…"></label>
+      <label class="field"><span>種類</span><select v-model="s.dKind"><option v-for="k in kinds(s)" :value="k">{{ kindLabel(k) }}</option></select></label>
+      <template v-if="isChannel(s)">
+        <label class="field"><span>チャンネル</span><select v-model="s.dUrl"><option value="">（選んでください）</option><option v-for="c in s.channels" :value="c.id">{{ (if (c.kind == "private") "🔒 " else "#") + c.name }}</option></select></label>
+        <p class="muted small">自分が参加しているチャンネルだけを選べます。保存した人（あなた）の {{ AppNames.of("stui") }} の連携で投稿するので、連携をやめたり、チャンネルを抜けたりすると届かなくなります。</p>
+      </template>
+      <label v-if="isEmail(s)" class="field"><span>宛先のメールアドレス</span><textarea v-model="s.dUrl" rows="3" placeholder="ops@example.com, oncall@example.com"></textarea></label>
+      <label v-if="isUrl(s)" class="field"><span>URL</span><input type="url" v-model="s.dUrl" placeholder="https://stui.example.com/hooks/…"></label>
       <p v-if="isStui(s)" class="muted small">{{ AppNames.of("stui") }} の受信 Webhook の URL（{{ AppNames.of("stui") }} の URL/hooks/…）を貼ります。</p>
       <label v-if="isWebhook(s)" class="field"><span>署名の鍵（任意。変えるときだけ入力）</span><input type="text" v-model="s.dSecret"></label>
       <div class="actions"><button @click="s.editing := None">キャンセル</button><button class="primary" @click="saveDest(s)">保存</button></div>

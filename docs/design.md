@@ -13,7 +13,7 @@ skorimako はチームのためのオブザーバビリティ基盤です（ロ�
 | 取り込み | OTLP/HTTP（protobuf・JSON、gzip・deflate）、OTLP/gRPC、Prometheus の remote write、JSON・NDJSON のログ、ブラウザの SDK（RUM）。取り込みの変換（伏せる・落とす・間引く）と上限 |
 | 保存 | 観測データは S3 互換ストレージの Parquet（zstd）。ストリーム・列・ファイルの一覧・トレースの索引・設定は PostgreSQL |
 | 検索 | DuckDB（組み込み）の SQL。画面のログ・メトリクス・トレースの検索も SQL に組み立てて実行する。PromQL と Prometheus の HTTP API。書き出す前の行も出す |
-| アラート | 閾値・SQL・途絶。発生・解消・再通知・対応中・ミュート。通知先は stui（受信 Webhook・各自の DM）・Slack 互換・Webhook |
+| アラート | 閾値・SQL・途絶。発生・解消・再通知・対応中・ミュート。通知先は stui（チャンネル・各自の DM・受信 Webhook）・メール・Slack 互換・Webhook |
 | 権限 | ストリームごとに閲覧できる IdP のグループを決められる（決めなければログインした全員） |
 | 自己監視 | skorimako 自身の動きと JVM をメトリクスとして、警告・エラーをログとして自分に取り込む |
 | 画面 | ホーム・ログ・メトリクス・トレース・フロントエンド・ダッシュボード・アラート・ストリーム・設定・管理 |
@@ -151,6 +151,9 @@ skorimako はチームのためのオブザーバビリティ基盤です（ロ�
 - 対応中（確認済み）: 発生中のルールに印を付けると、通知先に「👀 対応中」を送り、解消するまで再通知しない。解消すると外れる。
 - ミュート（`alert_silence`）: ルールごと、またはすべてのルール（管理者。メンテナンスの時間帯）。評価と履歴は続け、送信待ちを作らない（履歴に「ミュート中」の印）。
 - stui の DM（kind stui_dm）: 宛先の人が stui と OAuth で連携していれば、その人のトークンで stui の `POST /api/apps/notify` を呼ぶ（401 なら連携を外し、送るのをやめる）。
+- stui のチャンネル（kind stui_channel）: url はチャンネルの ID、target_user_id は通知先を保存した人。保存するときに、その人が参加しているチャンネルかを
+  stui の `GET /api/channels` で確かめる。送るときはその人のトークンで `POST /api/apps/notify`（channel 付き）を呼ぶ（401 は連携を外す。403・404 は送り直さない）。
+- メール（kind email）: url は宛先のアドレス（カンマ区切り・10 件まで）。SMTP（`SMTP_HOST` など。sbirds-lib の Mailer）で宛先ごとに 1 通送る。未設定なら送らない。
 
 ## 7. フロントエンドの観測（RUM）
 

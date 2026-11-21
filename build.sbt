@@ -35,6 +35,7 @@ lazy val libMcp = ProjectRef(sbirdsLib, "mcp")
 lazy val libPush = ProjectRef(sbirdsLib, "push")
 lazy val libWeb = ProjectRef(sbirdsLib, "web")
 lazy val libLinks = ProjectRef(sbirdsLib, "links")
+lazy val libMail = ProjectRef(sbirdsLib, "mail")
 lazy val libDb = ProjectRef(sbirdsLib, "db")
 lazy val libNet = ProjectRef(sbirdsLib, "net")
 lazy val libOauth = ProjectRef(sbirdsLib, "oauth")
@@ -133,7 +134,7 @@ lazy val engine = (project in file("modules/engine"))
   )
 
 lazy val api = (project in file("modules/api"))
-  .dependsOn(core, db % "compile;test->test", auth, storage, engine, shared.jvm, libHttp, libMcp, libPush, libLinks, libNet, libOauth)
+  .dependsOn(core, db % "compile;test->test", auth, storage, engine, shared.jvm, libHttp, libMcp, libPush, libLinks, libMail, libNet, libOauth)
   .settings(commonTest)
   .settings(
     libraryDependencies ++= Seq(

@@ -27,15 +27,17 @@ import scala.concurrent.duration.*
  * 評価: 時刻が来たルールを全ノードが取り合い（次の評価の時刻を先に進めるので二重にしない）、直近 period の範囲で SQL を実行する。
  * 通知: 状態が変わったとき（発生・解消）と、発生中に沈黙の時間が過ぎたときに、通知先へ送る（送信待ちの表から再試行つきで）。
  * http は利用者が決めた通知先へ送るクライアント（Main で NetGuard.client から作る。リダイレクトは追わない）。
+ * mailer はメールの通知先に送る（SMTP_HOST が未設定なら None で、メールの通知先には送らない）。
  */
 final class AlertService(store: AlertStore,
                          engine: QueryEngine,
                          http: Client[IO],
                          box: SecretBox,
                          cfg: ApiConfig,
-                         stui: StuiClient,
+                         val stui: StuiClient,
                          stats: Stats,
-                         push: PushService) {
+                         push: PushService,
+                         mailer: Option[sbirds.mail.Mailer] = None) {
 
   // ---------------------------------------------------------------- 検査・評価
 
@@ -228,6 +230,25 @@ final class AlertService(store: AlertStore,
 
   private def ruleUrl(id: UUID): String = s"${cfg.publicUrl}/alerts/$id"
 
+  /** 通知の見出し・本文・リンク（stui のチャンネルとメール）。 */
+  def message(d: DeliveryRow): (String, String, String) = {
+    val (icon, label) = AlertService.label(d.eventState)
+    val test = d.eventState == "test"
+    val detail = if test then "skorimako からの通知の試験です" else d.message.stripPrefix(d.ruleName + ": ")
+    val where = if test then "" else s"${StreamType.label(d.streamType)} / ${d.stream}"
+    (
+      s"$icon [$label] ${d.ruleName}",
+      List(detail, where).filter(_.nonEmpty).mkString("\n"),
+      if test then cfg.publicUrl else ruleUrl(d.ruleId)
+    )
+  }
+
+  /** メールの件名と本文（プレーンテキスト）。 */
+  def mail(d: DeliveryRow): (String, String) = {
+    val (title, text, url) = message(d)
+    (s"[skorimako] $title", s"$text\n\n$url\n\n-- \nskorimako のアラートの通知です（通知先: メール）。\n")
+  }
+
   /** 通知の本文。stui は Markdown、Slack は mrkdwn、webhook は JSON。 */
   def payload(d: DeliveryRow): Json = {
     val hits = d.hits.as[List[AlertHitDto]].getOrElse(Nil)
@@ -284,43 +305,71 @@ final class AlertService(store: AlertStore,
     }
 
   private def sendRaw(d: DeliveryRow): IO[OutboxResult] =
-    if d.kind == DestinationKind.StuiDm then
-      d.targetUserId match {
-        case None => IO.pure(OutboxResult.Skip("宛先の人がいません"))
-        case Some(u) =>
-          val text = payload(d.copy(kind = DestinationKind.Stui)).hcursor.get[String]("text").getOrElse(d.message)
-          stui.notify(u, text)
-      }
-    else
-      allowedHost(d.url).flatMap {
-        case false => IO.pure(OutboxResult.Skip("送信先が内部のネットワークのため送りませんでした"))
-        case true =>
-          val body = payload(d).noSpaces
-          val sig =
-            d.secret.flatMap(box.decrypt).map(k => "sha256=" + Crypto.hmacHex(k, body.getBytes(StandardCharsets.UTF_8)))
-          Uri.fromString(d.url).toOption match {
-            case None => IO.pure(OutboxResult.Skip("URL が正しくありません"))
-            case Some(uri) =>
-              // 署名した文字列をそのまま送る（circe のエンコーダーを通すと JSON の文字列として包まれてしまう）
-              val req = Request[IO](Method.POST, uri).withEntity(body)(using EntityEncoder.stringEncoder)
-                .withContentType(`Content-Type`(MediaType.application.json))
-                .putHeaders(
-                  "User-Agent" -> "skorimako-alert",
-                  "X-Skorimako-Event" -> s"alert.${d.eventState}",
-                  "X-Skorimako-Delivery" -> d.id.toString
-                )
-              val signed = sig.fold(req)(s => req.putHeaders("X-Skorimako-Signature" -> s))
-              http.run(signed).use(r => IO.pure(r.status.code)).timeout(15.seconds).attempt.map {
-                case Right(c) if c >= 200 && c < 300 => OutboxResult.Sent
-                case Right(c) if c == 404 || c == 410 => OutboxResult.Skip(s"HTTP $c")
-                case Right(c) => OutboxResult.Retry(s"HTTP $c")
-                case Left(_: java.util.concurrent.TimeoutException) => OutboxResult.Retry("時間切れ")
-                // 確かめた後に名前の向き先が変わったとき（http は確かめた IP にそのままつなぐ）
-                case Left(_: NetGuard.Rejected) => OutboxResult.Skip("送信先が内部のネットワークのため送りませんでした")
-                case Left(_) => OutboxResult.Retry("接続できませんでした")
-              }
-          }
-      }
+    d.kind match {
+      case DestinationKind.StuiDm =>
+        d.targetUserId match {
+          case None => IO.pure(OutboxResult.Skip("宛先の人がいません"))
+          case Some(u) =>
+            val text = payload(d.copy(kind = DestinationKind.Stui)).hcursor.get[String]("text").getOrElse(d.message)
+            stui.notify(u, text)
+        }
+      case DestinationKind.StuiChannel =>
+        d.targetUserId match {
+          case None => IO.pure(OutboxResult.Skip("通知先を作った人がいません（通知先を設定し直してください）"))
+          case Some(u) =>
+            val (title, text, url) = message(d)
+            stui.notifyChannel(u, d.url, title, text, url)
+        }
+      case DestinationKind.Email => sendMail(d)
+      case _ => sendHttp(d)
+    }
+
+  /** メールで送る（宛先ごとに 1 通. 途中で失敗したら送り直す. 送り直しでは、届いた宛先にも重ねて届くことがある）。 */
+  private def sendMail(d: DeliveryRow): IO[OutboxResult] =
+    (mailer, DestinationKind.emails(d.url)) match {
+      case (None, _) => IO.pure(OutboxResult.Skip("メールの送信が設定されていません（SMTP_HOST など）"))
+      case (_, Left(e)) => IO.pure(OutboxResult.Skip(e))
+      case (Some(m), Right(to)) =>
+        val (subject, body) = mail(d)
+        to.traverse_(a => m.send(sbirds.mail.Mail(a, "", subject, body))).timeout(60.seconds).attempt.map {
+          case Right(_) => OutboxResult.Sent
+          // 宛先のアドレスを SMTP のサーバーが受け付けない（送り直しても同じ）
+          case Left(e: jakarta.mail.SendFailedException) if Option(e.getInvalidAddresses).exists(_.nonEmpty) =>
+            OutboxResult.Skip("宛先のアドレスを受け付けられませんでした")
+          case Left(e) => OutboxResult.Retry(s"メールを送れませんでした（${e.getClass.getSimpleName}）")
+        }
+    }
+
+  private def sendHttp(d: DeliveryRow): IO[OutboxResult] =
+    allowedHost(d.url).flatMap {
+      case false => IO.pure(OutboxResult.Skip("送信先が内部のネットワークのため送りませんでした"))
+      case true =>
+        val body = payload(d).noSpaces
+        val sig =
+          d.secret.flatMap(box.decrypt).map(k => "sha256=" + Crypto.hmacHex(k, body.getBytes(StandardCharsets.UTF_8)))
+        Uri.fromString(d.url).toOption match {
+          case None => IO.pure(OutboxResult.Skip("URL が正しくありません"))
+          case Some(uri) =>
+            // 署名した文字列をそのまま送る（circe のエンコーダーを通すと JSON の文字列として包まれてしまう）
+            val req = Request[IO](Method.POST, uri).withEntity(body)(using EntityEncoder.stringEncoder)
+              .withContentType(`Content-Type`(MediaType.application.json))
+              .putHeaders(
+                "User-Agent" -> "skorimako-alert",
+                "X-Skorimako-Event" -> s"alert.${d.eventState}",
+                "X-Skorimako-Delivery" -> d.id.toString
+              )
+            val signed = sig.fold(req)(s => req.putHeaders("X-Skorimako-Signature" -> s))
+            http.run(signed).use(r => IO.pure(r.status.code)).timeout(15.seconds).attempt.map {
+              case Right(c) if c >= 200 && c < 300 => OutboxResult.Sent
+              case Right(c) if c == 404 || c == 410 => OutboxResult.Skip(s"HTTP $c")
+              case Right(c) => OutboxResult.Retry(s"HTTP $c")
+              case Left(_: java.util.concurrent.TimeoutException) => OutboxResult.Retry("時間切れ")
+              // 確かめた後に名前の向き先が変わったとき（http は確かめた IP にそのままつなぐ）
+              case Left(_: NetGuard.Rejected) => OutboxResult.Skip("送信先が内部のネットワークのため送りませんでした")
+              case Left(_) => OutboxResult.Retry("接続できませんでした")
+            }
+        }
+    }
 
   /** 通知先を試す（その場で送り、結果を返す）。 */
   def test(dest: UUID): IO[Either[String, String]] =

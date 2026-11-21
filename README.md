@@ -23,7 +23,7 @@ OpenTelemetry Collector や SDK から送られたデータを、S3 互換スト
 - **ダッシュボード**: SQL のパネル（折れ線・棒・数値・表）を並べる。`$__interval` で時間の範囲に合わせた区切り
 - **アラート**: 閾値（件数・平均・合計・パーセンタイル、列の値ごとに分けて）、SQL、**途絶**（データが来なくなったら。サービスごとにも）。
   発生・解消・発生中の再通知、**対応中（確認済み）**の印（再通知を止め、通知先にも知らせる）、**ミュート**（ルールごと・メンテナンスの時間帯）、試しに評価、履歴。
-  通知先は **stui**（受信 Webhook、または OAuth で連携した各自の **DM**）・Slack / Mattermost 互換・Webhook（署名付き JSON）。送信待ちの表から再試行
+  通知先は **stui**（OAuth で連携した人の **チャンネル**・各自の **DM**、または受信 Webhook）・**メール**（SMTP）・Slack / Mattermost 互換・Webhook（署名付き JSON）。送信待ちの表から再試行
 - **ストリーム**: 列と型（自動で増える。型が食い違えば広げる）、行数・保存量・データの範囲、保持期間（ストリームごと）、削除、
   **閲覧できるグループ**（IdP のグループで見られる人を絞る）
 - **検索の高速化**: ファイルごとに文字列の列の値の一覧を記録し、`列 = 値`・`列 IN (…)` の条件に合わないファイルは読まない
@@ -37,7 +37,7 @@ OpenTelemetry Collector や SDK から送られたデータを、S3 互換スト
 - レスポンシブ対応、ダークモード対応
 
 設計は [docs/design.md](docs/design.md)、構築・運用は [docs/operations.md](docs/operations.md)、
-stui への通知は [docs/integrations.md](docs/integrations.md) を参照してください。
+stui・メールへの通知は [docs/integrations.md](docs/integrations.md) を参照してください。
 
 兄弟のシステム: [stui](https://github.com/Ondeoma/stui)（チャット）、[skea](https://github.com/Ondeoma/skea)（タスク管理）、
 [skiwi](https://github.com/Ondeoma/skiwi)（Wiki）、[skawau](https://github.com/Ondeoma/skawau)（ファイル共有）。同じ技術・同じ運用方針で作っています。

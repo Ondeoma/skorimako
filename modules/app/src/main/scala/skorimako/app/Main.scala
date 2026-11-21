@@ -28,6 +28,7 @@ final case class AppConfig(port: Int,
                            s3: Option[S3Config],
                            storageDir: Option[String],
                            dataDir: java.nio.file.Path,
+                           smtp: Option[sbirds.mail.SmtpConfig],
                            appSecret: String,
                            nodeId: String,
                            ingest: IngestConfig,
@@ -90,7 +91,17 @@ object Main extends IOApp.Simple {
           cfg.api.publicUrl,
           r => IO(stats.inc("skorimako_push_sent_total", Map("result" -> r)))
         ))
-        alertSvc = new AlertService(alerts, engine, hookHttp, box, cfg.api, stuiCli, stats, push)
+        alertSvc = new AlertService(
+          alerts,
+          engine,
+          hookHttp,
+          box,
+          cfg.api,
+          stuiCli,
+          stats,
+          push,
+          cfg.smtp.map(new sbirds.mail.SmtpMailer(_))
+        )
         selfMon = new SelfMonitor(ingest, stats, apps, streams, lock, cfg.nodeId)
         _ <- Resource.eval(startupNotes(cfg))
         _ <- Resource.eval(IO.whenA(cfg.selfMonitor)(selfMon.ensureDashboard.handleErrorWith(e =>

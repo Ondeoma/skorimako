@@ -6,6 +6,7 @@ import cats.effect.*
 import cats.syntax.all.*
 import skorimako.api.*
 import sbirds.auth.OidcConfig
+import sbirds.mail.SmtpConfig
 import skorimako.engine.*
 import skorimako.storage.S3Config
 
@@ -97,6 +98,18 @@ object Config {
         ),
         storageDir = opt("STORAGE_DIR"),
         dataDir = dataDir,
+        // アラートのメールの通知（SMTP）. 送り先を skereru にすれば skereru から送る
+        smtp = opt("SMTP_HOST").map { h =>
+          val tls = opt("SMTP_TLS").getOrElse("starttls").toLowerCase
+          SmtpConfig(
+            h,
+            int("SMTP_PORT").getOrElse(if tls == "ssl" then 465 else if tls == "none" then 25 else 587),
+            opt("SMTP_USER"),
+            opt("SMTP_PASSWORD"),
+            tls,
+            opt("MAIL_FROM").getOrElse(s"skorimako@$h")
+          )
+        },
         appSecret = secret,
         nodeId = nodeId,
         ingest = IngestConfig(

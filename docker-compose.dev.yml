@@ -1,4 +1,4 @@
-# 開発用: PostgreSQL（本番は Patroni）と ScalaS3（S3 互換ストレージ）。
+# 開発用: PostgreSQL（本番は Patroni）と ScalaS3（S3 互換ストレージ）と Mailpit（送信メールを受け止めるだけの SMTP。http://localhost:8033 で中身を見られる）。
 # 兄弟のサービスの開発環境と同時に動かせるよう、ポートをずらしている。開発用のパスワードなので、このマシンの中からだけつなぐ
 name: skorimako
 services:
@@ -24,6 +24,9 @@ services:
       SCALAS3_SECRET_KEY: skorimakoskorimako
     ports: ["127.0.0.1:3923:3900"]
     volumes: ["s3data:/var/lib/scalas3/data"]
+  mail:
+    image: axllent/mailpit:v1.27
+    ports: ["127.0.0.1:1033:1025", "127.0.0.1:8033:8025"]
 volumes:
   pgdata:
   s3data:

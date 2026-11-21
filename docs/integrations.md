@@ -26,17 +26,37 @@ web: 93、orders: 42（条件 > 5）
 
 stui は社内のネットワークに置くことが多いため、通知先にはプライベートの IP も使えます（`WEBHOOK_DENY_PRIVATE=true` で断る）。
 
-## stui の DM に知らせる（OAuth）
+## stui の DM・チャンネルに知らせる（OAuth）
 
-各自が stui と連携すると、アラートをその人の stui の DM（stui のボット「skorimako」から）に送れます。
+各自が stui と連携すると、アラートをその人の stui の DM や、その人が参加しているチャンネルに（stui のボット「skorimako」から）送れます。
+受信 Webhook の URL を作らなくても、チャンネルを一覧から選ぶだけで通知先にできます。
 
 1. stui の `OAUTH_CLIENTS` に skorimako を登録する:
    `{"id": "skorimako", "secret": "（16文字以上）", "redirectUri": "https://observe.example.com/api/integrations/stui/callback", "name": "skorimako", "scopes": ["read", "write"]}`
 2. skorimako に `STUI_URL`・`STUI_CLIENT_ID`（skorimako）・`STUI_CLIENT_SECRET` を設定する（サーバーから呼ぶ URL が違えば `STUI_INTERNAL_URL`）。
 3. 各自が skorimako の「設定」→「stui と連携する」で許可する。
-4. 「アラート」→「通知先」→「自分の stui の DM を通知先にする」で通知先を作り、ルールで選ぶ（管理者でなくても、自分宛ての DM は作れる）。
+4. 通知先を作り、ルールで選ぶ:
+   - DM: 「アラート」→「通知先」→「自分の stui の DM を通知先にする」（管理者でなくても、自分宛ての DM は作れる）。
+   - チャンネル: 「通知先を追加」で種類「stui のチャンネル」を選び、自分が参加しているチャンネルを選ぶ（管理者）。
 
-送るときは stui の `POST /api/apps/notify`（`{"text": "…"}`、本人のトークン）を呼びます。トークンが失効していたら（401）、連携を外して送るのをやめます。
+送るときは stui の `POST /api/apps/notify` を呼びます。
+
+- DM: `{"text": "…"}`、宛先の人のトークン。
+- チャンネル: `{"title": "…", "text": "…", "url": "…", "channel": "<チャンネルの ID>"}`、通知先を保存した人のトークン。
+  保存するときに、保存する人が参加しているチャンネルか（`GET /api/channels`）を確かめ、その人を連携の持ち主にします。
+  ほかの管理者が編集して保存すると、持ち主はその人に変わります。
+
+トークンが失効していたら（401）、連携を外して送るのをやめます。持ち主がチャンネルを抜けた・チャンネルがアーカイブされた（403）、
+チャンネルがない（404）ときも、送り直さずに送信の記録に理由を残します。
+
+## メールで知らせる
+
+種類「メール」で、宛先のアドレス（カンマ区切りで 10 件まで）に送ります。本文はプレーンテキストで、件名は `[skorimako] 🔴 [発生] ルールの名前` の形です。
+
+送信は SMTP です（`SMTP_HOST`・`SMTP_PORT`・`SMTP_USER`・`SMTP_PASSWORD`・`SMTP_TLS`（`starttls`（既定）・`ssl`・`none`）・`MAIL_FROM`）。
+`SMTP_HOST` が未設定なら、メールの通知先には送らずに、送信の記録に理由を残します。送り先を skereru の SMTP にすれば、skereru から送れます。
+
+宛先ごとに 1 通ずつ送ります。途中で失敗したときは通知全体を送り直すので、先に届いた宛先に重ねて届くことがあります。
 
 ## stui からリンクの要約を読む
 

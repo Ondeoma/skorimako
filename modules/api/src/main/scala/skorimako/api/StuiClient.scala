@@ -20,8 +20,8 @@ import java.util.UUID
 import scala.concurrent.duration.*
 
 /**
- * stui（チャット）との連携のクライアント側: 各ユーザーが stui と OAuth で連携すると、アラートをその人の stui の DM に送れる
- * （stui の POST /api/apps/notify。stui のボット「skorimako」からの DM になる）。
+ * stui（チャット）との連携のクライアント側: 各ユーザーが stui と OAuth で連携すると、アラートをその人の stui の DM や、
+ * その人が参加しているチャンネルに送れる（stui の POST /api/apps/notify。stui のボット「skorimako」からの投稿になる）。
  * stui 側の OAUTH_CLIENTS に skorimako を登録する（redirectUri は {PUBLIC_URL}/api/integrations/stui/callback、scopes は read・write）。
  */
 final class StuiClient(cfg: Option[LinkService],
@@ -42,25 +42,79 @@ final class StuiClient(cfg: Option[LinkService],
 
   /** その人の stui の DM に送る。 */
   def notify(userId: UUID, text: String): IO[OutboxResult] =
+    post(userId, Json.obj("text" -> text.asJson), "宛先の人")
+
+  /**
+   * その人の連携で、その人が参加しているチャンネルに投稿する（通知先の stui_channel）。title は見出し（url があればリンク）、text は Markdown。
+   */
+  def notifyChannel(userId: UUID, channel: String, title: String, text: String, url: String): IO[OutboxResult] =
+    post(
+      userId,
+      Json.obj(
+        "title" -> title.take(300).asJson,
+        "text" -> text.take(2000).asJson,
+        "url" -> url.asJson,
+        "channel" -> channel.asJson
+      ),
+      "通知先を作った人"
+    )
+
+  /** who は連携の持ち主（エラーの文言に使う）。 */
+  private def post(userId: UUID, body: Json, who: String): IO[OutboxResult] =
     cfg match {
       case None => IO.pure(OutboxResult.Skip("stui との連携が設定されていません（STUI_URL など）"))
       case Some(c) =>
         token(userId).flatMap {
-          case None => IO.pure(OutboxResult.Skip("宛先の人が stui と連携していません"))
+          case None => IO.pure(OutboxResult.Skip(s"${who}が stui と連携していません"))
           case Some(t) =>
             val req = Request[IO](Method.POST, Uri.unsafeFromString(c.apiUrl + "/api/apps/notify"))
-              .withEntity(Json.obj("text" -> text.asJson))
-              .putHeaders(Authorization(Credentials.Token(AuthScheme.Bearer, t)), "User-Agent" -> "skorimako")
+              .withEntity(body)
+              .putHeaders(bearer(t), "User-Agent" -> "skorimako")
             http.run(req).use(r => IO.pure(r.status.code)).timeout(15.seconds).attempt.flatMap {
               case Right(code) if code >= 200 && code < 300 => IO.pure(OutboxResult.Sent)
               // トークンが失効している: 連携を外し、送るのをやめる（その人が連携し直す）
               case Right(401) =>
-                tokens.deleteToken(userId, Provider).as(OutboxResult.Skip("stui との連携が切れています（連携し直してください）"))
+                tokens.deleteToken(userId, Provider).as(OutboxResult.Skip(s"${who}の stui との連携が切れています（連携し直してください）"))
+              case Right(403) =>
+                IO.pure(OutboxResult.Skip("このチャンネルには投稿できません（チャンネルを抜けたか、アーカイブされたかもしれません）"))
+              case Right(404) => IO.pure(OutboxResult.Skip("チャンネルが見つかりません"))
               case Right(code) => IO.pure(OutboxResult.Retry(s"HTTP $code"))
               case Left(_) => IO.pure(OutboxResult.Retry("stui に接続できませんでした"))
             }
         }
     }
+
+  /** 投稿先に選べるチャンネル（その人が参加している公開・非公開のもの。アーカイブしたものは除く。名前の順）。 */
+  def channels(userId: UUID): IO[Either[ErrorCode, List[StuiChannelDto]]] =
+    cfg match {
+      case None => IO.pure(Left(ErrorCode.StuiNotConfigured))
+      case Some(c) =>
+        token(userId).flatMap {
+          case None => IO.pure(Left(ErrorCode.StuiNotConnected))
+          case Some(t) =>
+            val req = Request[IO](Method.GET, Uri.unsafeFromString(c.apiUrl + "/api/channels"))
+              .putHeaders(bearer(t), "User-Agent" -> "skorimako")
+            http.run(req).use { r =>
+              if r.status == Status.Unauthorized then
+                tokens.deleteToken(userId, Provider).as(Left(ErrorCode.StuiConnectionExpired))
+              else if !r.status.isSuccess then IO.pure(Left(ErrorCode.StuiChannelsUnreadable))
+              else
+                r.as[Json].map(j =>
+                  Right(j.asArray.getOrElse(Vector.empty).toList.flatMap { x =>
+                    val h = x.hcursor
+                    for {
+                      id <- h.get[String]("id").toOption
+                      name <- h.get[String]("name").toOption
+                      kind <- h.get[String]("kind").toOption if kind == "public" || kind == "private"
+                      if !h.get[Boolean]("archived").getOrElse(false) && h.get[Boolean]("member").getOrElse(true)
+                    } yield StuiChannelDto(id, name, kind, h.get[String]("role").toOption.contains("admin"))
+                  }.sortBy(_.name.toLowerCase))
+                )
+            }.timeout(10.seconds).handleError(_ => Left(ErrorCode.StuiUnreachable))
+        }
+    }
+
+  private def bearer(t: String): Authorization = Authorization(Credentials.Token(AuthScheme.Bearer, t))
 
   private def basic(c: LinkService): Authorization = Authorization(BasicCredentials(c.clientId, c.clientSecret))
 
@@ -73,6 +127,7 @@ final class StuiClient(cfg: Option[LinkService],
       val r: HttpRoutes[IO] = HttpRoutes.of[IO] {
         case req @ GET -> Root / "api" / "integrations" => getIntegrations(req)
         case req @ GET -> Root / "api" / "integrations" / "stui" / "connect" => getIntegrationsStuiConnect(req)
+        case req @ GET -> Root / "api" / "integrations" / "stui" / "channels" => getIntegrationsStuiChannels(req)
         case req @ GET -> Root / "api" / "integrations" / "stui" / "callback" => getIntegrationsStuiCallback(req)
         case req @ DELETE -> Root / "api" / "integrations" / "stui" / "connection" =>
           deleteIntegrationsStuiConnection(req)
@@ -89,6 +144,10 @@ final class StuiClient(cfg: Option[LinkService],
               )
           }
         )
+
+      /** 本人が投稿先に選べる stui のチャンネル（通知先の stui_channel を作るとき）。 */
+      private def getIntegrationsStuiChannels(req: Request[IO]): IO[Response[IO]] =
+        sessionOnly(req)(s => channels(s.user.id).flatMap(_.fold(err(_), Ok(_))))
 
       private def getIntegrationsStuiConnect(req: Request[IO]): IO[Response[IO]] =
         sessionOnly(req)(s =>

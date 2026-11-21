@@ -447,12 +447,37 @@ object DestinationKind {
 
   /** stui の DM（宛先の人が stui と連携している必要がある）. */
   val StuiDm = "stui_dm"
-  val all: List[String] = List(Stui, StuiDm, Slack, Webhook)
+
+  /** stui のチャンネル（通知先を作った人の stui の連携で、その人が参加しているチャンネルに投稿する. url はチャンネルの ID）. */
+  val StuiChannel = "stui_channel"
+
+  /** メール（url は宛先のアドレス. 複数はカンマ区切り）. */
+  val Email = "email"
+  val all: List[String] = List(StuiChannel, Stui, StuiDm, Email, Slack, Webhook)
+
+  /** メールの宛先の数の上限. */
+  val MaxEmails = 10
+
+  /** メールアドレスの形（ざっくり. 空白・カンマ・山括弧を含まない）. */
+  private val emailRe = "^[^\\s\\p{Cntrl}@,<>\"]+@[^\\s\\p{Cntrl}@,<>\"]+\\.[^\\s\\p{Cntrl}@,<>\"]+$".r
+
+  /** メールの宛先を読む（カンマ・空白・改行で区切る. 重なりは除く）. 正しくないアドレスがあれば Left. */
+  def emails(s: String): Either[String, List[String]] = {
+    val xs = s.split("[,;\\s]+").map(_.trim).filter(_.nonEmpty).distinct.toList
+    xs.find(x => !emailRe.matches(x) || x.length > 254) match {
+      case Some(bad) => Left(s"メールアドレスが正しくありません: $bad")
+      case None if xs.isEmpty => Left("メールアドレスを入力してください")
+      case None if xs.size > MaxEmails => Left(s"メールの宛先は $MaxEmails 件までです")
+      case None => Right(xs)
+    }
+  }
 
   /** 種類の名前. stui は stui の表示名（画面では AppNames.nameOf("stui")）. */
   def label(k: String, stui: String = "stui"): String = k match {
     case Stui => s"$stui（受信 Webhook）"
     case StuiDm => s"$stui の DM"
+    case StuiChannel => s"$stui のチャンネル"
+    case Email => "メール"
     case Slack => "Slack・Mattermost 互換の Webhook"
     case Webhook => "Webhook（JSON・署名付き）"
     case _ => k
@@ -469,12 +494,17 @@ final case class DestinationDto(id: UUID,
 
 /** secret は webhook の署名の鍵（省略時は署名しない. 変更時に None なら変えない）. */
 /** stui_dm は targetUserId の人の DM へ（url は使わない. 管理者でなければ自分だけ）. */
+/** stui_channel は url がチャンネルの ID（作った人の連携で投稿する）. email は url が宛先のアドレス. */
 final case class DestinationReq(name: String,
                                 kind: String,
                                 url: String,
                                 secret: Option[String],
                                 targetUserId: Option[UUID] = None)
   derives Encoder.AsObject, Decoder
+
+/** 通知先に選べる stui のチャンネル（admin はチャンネルの管理者か）. */
+final case class StuiChannelDto(id: String, name: String, kind: String, admin: Boolean) derives Encoder.AsObject,
+    Decoder
 
 /** 外部のサービスとの連携（stui）. */
 final case class IntegrationDto(provider: String, name: String, url: String, connected: Boolean)

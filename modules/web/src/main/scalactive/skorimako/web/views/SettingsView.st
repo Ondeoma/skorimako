@@ -34,7 +34,7 @@ def loadIntegrations(s: State): Unit = Api.get[List[IntegrationDto]]("/api/integ
 
 def connect(p: String): Unit = org.scalajs.dom.window.location.href = s"/api/integrations/$p/connect?returnTo=" + Api.enc("/settings")
 
-def disconnect(s: State, i: IntegrationDto): Unit = Dialog.confirm(s"${i.name} との連携をやめますか？（${i.name} の DM へのアラートの通知が届かなくなります）", "やめる") {
+def disconnect(s: State, i: IntegrationDto): Unit = Dialog.confirm(s"${i.name} との連携をやめますか？（${i.name} の DM・チャンネルへのアラートの通知が届かなくなります）", "やめる") {
   Toasts.report(Api.delete(s"/api/integrations/${i.provider}/connection")) { _ => Toasts.show(s"${i.name} との連携をやめました"); loadIntegrations(s) }
 }
 

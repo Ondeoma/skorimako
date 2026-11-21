@@ -188,9 +188,11 @@ final class AlertRoutes(store: AlertStore,
           case Right(v) if !canManage(s, v.kind, v.targetUserId) =>
             err(ErrorCode.ChannelCreateAdminOnly)
           case Right(v) =>
-            store.createDestination(v, v.secret.map(_.trim).filter(_.nonEmpty).map(box.encrypt), s.user.id).flatMap(
-              id =>
-                audit(users, s, "destination.create", Some(id.toString)) *> store.destination(id).flatMap(Created(_))
+            withChannel(s, v)(v =>
+              store.createDestination(v, v.secret.map(_.trim).filter(_.nonEmpty).map(box.encrypt), s.user.id).flatMap(
+                id =>
+                  audit(users, s, "destination.create", Some(id.toString)) *> store.destination(id).flatMap(Created(_))
+              )
             )
         }
       )
@@ -205,11 +207,13 @@ final class AlertRoutes(store: AlertStore,
           case Right(v) =>
             // secret: 省略なら変えない、空の文字列なら外す
             val secret = v.secret.map(x => Option(x.trim).filter(_.nonEmpty).map(box.encrypt))
-            store.updateDestination(id, v, secret).flatMap {
-              case false => err(ErrorCode.ChannelNotFound)
-              case true => audit(users, s, "destination.update", Some(id.toString)) *>
-                  store.destination(id).flatMap(Ok(_))
-            }
+            withChannel(s, v)(v =>
+              store.updateDestination(id, v, secret).flatMap {
+                case false => err(ErrorCode.ChannelNotFound)
+                case true => audit(users, s, "destination.update", Some(id.toString)) *>
+                    store.destination(id).flatMap(Ok(_))
+              }
+            )
         }
       )
     )
@@ -252,22 +256,54 @@ final class AlertRoutes(store: AlertStore,
   private def canManage(s: AuthSession, kind: String, target: Option[java.util.UUID]): Boolean =
     s.canAdmin || (kind == DestinationKind.StuiDm && target.contains(s.user.id) && s.canWrite)
 
-  private def destOk(r: DestinationReq): Either[String, DestinationReq] = {
-    val dm = r.kind == DestinationKind.StuiDm
+  /**
+   * stui のチャンネルは、保存する人の連携で投稿する: 保存する人が参加しているチャンネルか確かめ、その人を連携の持ち主（target_user_id）にする。
+   * ほかの種類はそのまま。
+   */
+  private def withChannel(s: AuthSession, v: DestinationReq)(f: DestinationReq => IO[Response[IO]]): IO[Response[IO]] =
+    if v.kind != DestinationKind.StuiChannel then f(v)
+    else
+      svc.stui.channels(s.user.id).flatMap {
+        case Left(e) => err(e)
+        case Right(cs) if !cs.exists(_.id == v.url) => err(ErrorCode.StuiChannelNotJoined)
+        case Right(_) => f(v.copy(targetUserId = Some(s.user.id)))
+      }
+
+  private def destOk(r: DestinationReq): Either[String, DestinationReq] =
+    AlertRoutes.destOk(r)
+}
+
+object AlertRoutes {
+
+  /** 通知先の入力を確かめ、正しい形にする（種類ごとに url の意味が違う）。 */
+  def destOk(r: DestinationReq): Either[String, DestinationReq] = {
+    val url = r.url.trim
+    val checked: Either[String, String] = r.kind match {
+      case DestinationKind.StuiDm =>
+        Either.cond(r.targetUserId.isDefined, "", "DM を送る人を指定してください")
+      case DestinationKind.StuiChannel =>
+        Either.cond(url.nonEmpty && url.length <= 100, url, "チャンネルを選んでください")
+      case DestinationKind.Email =>
+        DestinationKind.emails(url).map(_.mkString(", "))
+      case k if DestinationKind.all.contains(k) =>
+        for {
+          _ <- Either.cond(
+            url.startsWith("https://") || url.startsWith("http://"),
+            (),
+            "URL は http:// か https:// で始めてください"
+          )
+          _ <- Either.cond(Uri.fromString(url).isRight, (), "URL が正しくありません")
+        } yield url
+      case _ => Left("種類が正しくありません")
+    }
     for {
       _ <- Either.cond(r.name.trim.nonEmpty, (), "名前を入力してください")
-      _ <- Either.cond(DestinationKind.all.contains(r.kind), (), "種類が正しくありません")
-      _ <- Either.cond(
-        dm || r.url.trim.startsWith("https://") || r.url.trim.startsWith("http://"),
-        (),
-        "URL は http:// か https:// で始めてください"
-      )
-      _ <- Either.cond(dm || Uri.fromString(r.url.trim).isRight, (), "URL が正しくありません")
-      _ <- Either.cond(!dm || r.targetUserId.isDefined, (), "DM を送る人を指定してください")
+      u <- checked
     } yield r.copy(
       name = r.name.trim.take(200),
-      url = if dm then "" else r.url.trim,
-      targetUserId = if dm then r.targetUserId else None
+      url = u,
+      targetUserId = if r.kind == DestinationKind.StuiDm then r.targetUserId else None,
+      secret = if r.kind == DestinationKind.Webhook then r.secret else r.secret.map(_ => "")
     )
   }
 

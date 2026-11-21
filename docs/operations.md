@@ -120,7 +120,8 @@ service:
 | `NODE_ID` | ホスト名＋乱数 | ノードの名前（ログ・S3 のキー・ジョブのリース） |
 | `NODE_URL` | | ほかのノードからこのノードを呼ぶ URL（書き出す前の行をノードをまたいで検索に出す。1台なら不要） |
 | `GRPC_PORT` | 4317 | OTLP/gRPC（0 で止める） |
-| `STUI_URL`・`STUI_CLIENT_ID`・`STUI_CLIENT_SECRET`・`STUI_INTERNAL_URL` | | stui の DM への通知（[integrations.md](integrations.md)） |
+| `STUI_URL`・`STUI_CLIENT_ID`・`STUI_CLIENT_SECRET`・`STUI_INTERNAL_URL` | | stui の DM・チャンネルへの通知（[integrations.md](integrations.md)） |
+| `SMTP_HOST`・`SMTP_PORT`・`SMTP_USER`・`SMTP_PASSWORD`・`SMTP_TLS`・`MAIL_FROM` | | アラートのメールの通知（未設定ならメールでは送らない。`SMTP_TLS` は starttls（既定）・ssl・none、`MAIL_FROM` の既定は `skorimako@<SMTP_HOST>`） |
 | `OAUTH_CLIENTS` | | skorimako を使う外部のサービス（stui がリンクの要約を読む） |
 | `SELF_MONITOR` | true | 自己監視（自分のメトリクス・ログ・ダッシュボード） |
 | `LOG_FORMAT`・`LOG_LEVEL` | text・INFO | 標準出力のログの形（`text`・`json`）と水準。自分のログは OTLP では送らない（警告・エラーは自己監視で自分に取り込む） |
