@@ -2,7 +2,6 @@ package skorimako.api
 
 import cats.effect.*
 import org.http4s.*
-import sbirds.http.RateLimit.Path
 import sbirds.http.RateLimitConfig
 import skorimako.core.ErrorCode
 

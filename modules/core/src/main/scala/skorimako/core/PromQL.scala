@@ -407,6 +407,9 @@ object PromQL {
     }
 
   /** 式の中のセレクター（データを読む対象）。 */
+  /** 範囲・オフセットを外したセレクター（データを読む単位）。enum のケースの copy は Expr に広がるので new で作る */
+  def bare(s: Expr.Selector): Expr.Selector = new Expr.Selector(s.name, s.matchers, None, 0)
+
   def selectors(e: Expr): List[Expr.Selector] = e match {
     case s: Expr.Selector => List(s)
     case Expr.Call(_, as) => as.flatMap(selectors)

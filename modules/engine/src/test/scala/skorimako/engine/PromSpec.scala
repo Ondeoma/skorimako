@@ -16,7 +16,7 @@ class PromSpec extends munit.FunSuite {
 
   private val end = 1700000000000L
   private val data = (q: String) =>
-    PromQL.selectors(parse(q)).map(_.copy(range = None, offset = 0)).map(s =>
+    PromQL.selectors(parse(q)).map(PromQL.bare).map(s =>
       s -> List(
         counter(Map("__name__" -> "jobs_total", "job" -> "w", "instance" -> "a"), 1, end),
         counter(Map("__name__" -> "jobs_total", "job" -> "w", "instance" -> "b"), 2, end)

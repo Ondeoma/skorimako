@@ -59,7 +59,7 @@ stui・メールへの通知は [docs/integrations.md](docs/integrations.md) を
 | `frontend/` | Vite。Scala.js の出力と uPlot（グラフ）をまとめてビルドする。`public/rum.js` はブラウザの観測の SDK、`public/sw.js` は PWA の Service Worker（オフラインで開く・プッシュ通知） |
 | `deploy/` | Docker（試験用の3ノード構成）と VM 構築用の設定のひな形 |
 
-技術: Scala 3.3 LTS、Cats Effect 3、http4s 1.0（マイルストーン版）、doobie、Flyway、PostgreSQL 17、DuckDB（組み込み）、Apache Parquet、
+技術: Scala 3.9 LTS、Cats Effect 3、http4s 1.0（マイルストーン版）、doobie、Flyway、PostgreSQL 17、DuckDB（組み込み）、Apache Parquet、
 OpenTelemetry Protocol、S3 互換ストレージ、Scala.js + Scalactive、uPlot。
 
 ## 開発

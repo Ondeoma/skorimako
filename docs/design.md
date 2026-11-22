@@ -19,7 +19,7 @@ skorimako はチームのためのオブザーバビリティ基盤です（ロ�
 | 画面 | ホーム・ログ・メトリクス・トレース・フロントエンド・ダッシュボード・アラート・ストリーム・設定・管理 |
 | AI | MCP（Model Context Protocol）。ログ・メトリクス・トレースの検索、SQL、アラート、任意の REST API |
 | 基盤 | PostgreSQL（Patroni）、S3 互換ストレージ、アプリは複数ノード |
-| 実装 | Scala 3.3 LTS、Cats Effect 3、http4s 1.0（マイルストーン版）、doobie、Flyway、DuckDB、opentelemetry-proto。画面は Scalactive（Scala.js）と uPlot |
+| 実装 | Scala 3.9 LTS、Cats Effect 3、http4s 1.0（マイルストーン版）、doobie、Flyway、DuckDB、opentelemetry-proto。画面は Scalactive（Scala.js）と uPlot |
 
 ## 2. 全体アーキテクチャ
 

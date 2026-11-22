@@ -426,7 +426,7 @@ final class QueryEngine(store: StreamStore,
                start: Long,
                end: Long,
                maxRows: Int = 5000000): IO[Either[String, Map[PromQL.Expr.Selector, List[Prom.Series]]]] = {
-    val sels = PromQL.selectors(e).map(_.copy(range = None, offset = 0)).distinct
+    val sels = PromQL.selectors(e).map(PromQL.bare).distinct
     val from = (start - PromQL.lookback(e) - Prom.LookbackDelta) * 1000
     val to = end * 1000
     // 読んだ行の数（式のすべてのセレクターの合計）

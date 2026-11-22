@@ -2,7 +2,6 @@ package skorimako.engine
 
 import sbirds.db.*
 import cats.effect.*
-import cats.syntax.all.*
 import cats.effect.syntax.all.*
 import skorimako.core.{ErrorCode, Prune}
 import skorimako.db.*
