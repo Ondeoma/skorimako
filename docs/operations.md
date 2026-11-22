@@ -47,7 +47,7 @@
 ## 2. 構築手順
 
 ### 2.1 共通
-- 時刻同期（chrony）、ホスト名解決、ファイアウォール。Java 21。DuckDB のネイティブのライブラリを使うため、glibc の Linux（x86_64・arm64）にする。
+- 時刻同期（chrony）、ホスト名解決、ファイアウォール。Java 25。DuckDB のネイティブのライブラリを使うため、glibc の Linux（x86_64・arm64）にする。
 
 ### 2.2 etcd（3台）
 [etcd.env](../deploy/vm/etcd.env) を各ノード用に書き換えて配置し、`systemctl enable --now etcd`。`etcdctl endpoint health --cluster` で確認。

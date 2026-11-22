@@ -64,7 +64,7 @@ OpenTelemetry Protocol、S3 互換ストレージ、Scala.js + Scalactive、uPlo
 
 ## 開発
 
-必要なもの: JDK 21、sbt、Node.js、Docker。
+必要なもの: JDK 25、sbt、Node.js、Docker。
 
 ```bash
 docker compose -f docker-compose.dev.yml up -d --wait   # PostgreSQL (:54383)、ScalaS3 (:3923)
